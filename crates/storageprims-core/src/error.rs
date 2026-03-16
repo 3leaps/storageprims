@@ -35,10 +35,7 @@ impl std::fmt::Display for ProviderKind {
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("{provider}: object not found: {key}")]
-    NotFound {
-        key: String,
-        provider: ProviderKind,
-    },
+    NotFound { key: String, provider: ProviderKind },
 
     #[error("{provider}: access denied: {key} — {detail}")]
     AccessDenied {
@@ -72,10 +69,7 @@ pub enum StorageError {
     },
 
     #[error("invalid URI: {uri} — {reason}")]
-    InvalidUri {
-        uri: String,
-        reason: String,
-    },
+    InvalidUri { uri: String, reason: String },
 
     #[error("I/O error: {source}")]
     Io {
