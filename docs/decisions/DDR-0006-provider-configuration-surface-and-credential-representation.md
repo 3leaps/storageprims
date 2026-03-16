@@ -156,10 +156,15 @@ The config model must allow provider-native selectors rather than forcing all au
 Examples:
 
 - AWS profile names and endpoints
+- S3-compatible endpoints, path-style flags, and static credential selectors
 - GCP configuration names or ADC file paths
 - Azure tenant/client selectors where needed
 
 Uniformity should exist at the representation level, not by erasing provider-specific concepts that users already depend on.
+
+AWS-native and S3-compatible deployments should therefore be treated as related but not identical
+configuration modes. `storageprims-s3` should preserve AWS-first defaults while still allowing
+explicit endpoint/auth overrides for compatible systems when the caller opts into them.
 
 ## Trade-offs
 
@@ -202,11 +207,19 @@ That would blur the line between storage access and secrets management, and woul
 - Explicit env-map delivery should be designed with redaction and bounded scope in mind.
 - Documentation should distinguish "recommended" auth modes from merely "supported" ones.
 
+## Decision Points
+
+This record should remain `Proposed` until:
+
+- the `CredentialSource` shape is exercised in CLI, FFI, and Go binding paths
+- AWS-native and S3-compatible configurations both fit cleanly without collapsing into one misleading auth model
+- inline-secret and reference-based flows are both validated across same-process and separate-process usage
+
 ## References
 
 - `docs/decisions/ADR-0001-canonical-core-contract-and-provider-neutral-surface.md`
 - `docs/decisions/ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/docs/auth/aws-profiles.md`
-- `/Users/davethompson/dev/fulmenhq/fulseed/docs/guides/s3/authentication.md`
-- `/Users/davethompson/dev/fulmenhq/fulseed/docs/guides/gcs/authentication.md`
-- `/Users/davethompson/dev/3leaps/seclusor/README.md`
+- `https://github.com/3leaps/gonimbus/blob/main/docs/auth/aws-profiles.md`
+- `https://github.com/fulmenhq/fulseed/blob/main/docs/guides/s3/authentication.md`
+- `https://github.com/fulmenhq/fulseed/blob/main/docs/guides/gcs/authentication.md`
+- `https://github.com/3leaps/seclusor/blob/main/README.md`

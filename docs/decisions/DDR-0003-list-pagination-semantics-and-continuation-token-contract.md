@@ -1,6 +1,6 @@
 # DDR-0003: List Pagination Semantics and Continuation-Token Contract
 
-> **Status**: Proposed
+> **Status**: Approved
 > **Date**: 2026-03-16
 > **Authors**: entarch, devlead, Architecture Council
 
@@ -202,11 +202,21 @@ enumeration and application-specific post-processing.
 - Delimiter/common-prefix support should be settled with the optional-capability decision,
   not smuggled into ad hoc list parameters.
 
+## Decision Points
+
+This record is `Approved` on current evidence.
+
+Re-open or supersede it if:
+
+- provider implementations expose a practical need for storageprims-owned durable cursors
+- early consumers raise strong objections to request-scoped tokens or provider-native ordering
+- launch use cases require storageprims itself to provide stronger pagination guarantees than this record allows
+
 ## References
 
 - `docs/decisions/ADR-0001-canonical-core-contract-and-provider-neutral-surface.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/docs/architecture/indexing.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/docs/architecture/adr/ADR-0003-index-build-provider-capabilities.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/pkg/provider/provider.go`
-- `/Users/davethompson/dev/fulmenhq/fulseed/contracts/contracts.go`
-- `/Users/davethompson/dev/fulmenhq/datarakt/README.md`
+- `https://github.com/3leaps/gonimbus/blob/main/docs/architecture/indexing.md`
+- `https://github.com/3leaps/gonimbus/blob/main/docs/architecture/adr/ADR-0003-index-build-provider-capabilities.md`
+- `https://github.com/3leaps/gonimbus/blob/main/pkg/provider/provider.go`
+- `https://github.com/fulmenhq/fulseed/blob/main/contracts/contracts.go`
+- `https://github.com/fulmenhq/datarakt/blob/main/README.md`
