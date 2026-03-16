@@ -47,8 +47,7 @@ full catalog, selection guide, and escalation paths.
 | `ffiarch`      | Bindings, cross-language integration            | `config/agentic/roles/ffiarch.yaml`      |
 | `deliverylead` | Gate tracking, delivery coordination            | `config/agentic/roles/deliverylead.yaml` |
 | `infoarch`     | Docs, schemas, standards                        | `config/agentic/roles/infoarch.yaml`     |
-| `releng`       | Release workflows, artifact signing             | `config/agentic/roles/releng.yaml`       |
-| `cicd`         | Pipelines, runners, platform matrix             | `config/agentic/roles/cicd.yaml`         |
+| `releng`       | Release workflows, artifact signing, CI/CD      | `config/agentic/roles/releng.yaml`       |
 
 ## PR Workflow
 

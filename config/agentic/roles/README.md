@@ -17,8 +17,7 @@ storageprims-specific scope, responsibilities, and validation requirements.
 | [FFI Architect](ffiarch.yaml)          | `ffiarch`      | agentic    | Bindings, cross-language integration, cbindgen         |
 | [Delivery Lead](deliverylead.yaml)     | `deliverylead` | governance | Gate tracking, sprint cadence, consumer readiness      |
 | [Information Architect](infoarch.yaml) | `infoarch`     | agentic    | Documentation, schemas, standards                      |
-| [Release Engineering](releng.yaml)     | `releng`       | automation | Release workflows, artifact signing, crates.io         |
-| [CI/CD Automation](cicd.yaml)          | `cicd`         | automation | Pipelines, runners, platform matrix                    |
+| [Release Engineering](releng.yaml)     | `releng`       | automation | Release workflows, artifact signing, CI/CD, crates.io  |
 
 ## Key Customizations for storageprims
 
@@ -65,8 +64,7 @@ Role: devlead (config/agentic/roles/devlead.yaml)
 | FFI layer / Go bindings | ffiarch      | secrev (memory safety), devlead (impl)         |
 | Security review         | secrev       | human maintainers (critical)                   |
 | Test design             | qa           | devlead (implementation questions)             |
-| CI/CD changes           | cicd         | releng (release workflows), secrev (secrets)   |
-| Release preparation     | releng       | deliverylead (gate status), human (approval)   |
+| CI/CD and release       | releng       | deliverylead (gate status), secrev (secrets), human (approval) |
 | Documentation           | infoarch     | entarch (decision content), devlead (accuracy) |
 | Delivery coordination   | deliverylead | entarch (decisions), devlead (timelines)       |
 
