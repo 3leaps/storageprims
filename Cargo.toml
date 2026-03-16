@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/storageprims-core",
+    # "crates/storageprims-s3",
+    # "crates/storageprims-gcs",
+    # "crates/storageprims-azb",
+    # "crates/storageprims-local",
+    # "crates/storageprims-cli",
+    # "ffi/storageprims-ffi",
+    # "bindings/typescript/storageprims/native",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/3leaps/storageprims"
+authors = ["3leaps Architecture Council"]
+
+[workspace.dependencies]
+storageprims-core = { path = "crates/storageprims-core" }
+
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error Handling
+thiserror = "2.0"
+
+# Bytes
+bytes = "1"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# CLI (when storageprims-cli is added)
+# clap = { version = "4.5", features = ["derive", "env"] }
