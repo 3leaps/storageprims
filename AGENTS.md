@@ -4,20 +4,17 @@
 
 Read these in order before starting any task:
 
-1. **`~/dev/3leaps/mgmthub/AGENTS.md`** — org-level layout and invariants
-2. **`~/dev/3leaps/mgmthub/AGENTS.local.md`** — machine-local overrides (if present)
-3. **This file** — storageprims operational protocols
-4. **`AGENTS.local.md`** — session-specific guidance (if present, gitignored)
-5. **Your role's context** — `~/dev/3leaps/mgmthub/context/<your-role>/STATE.md`
-6. **Productbook stream** — `~/dev/3leaps/3leaps-productbook-internal/content/projmgmt/storageprims/index.md`
-7. **Pending messages** — `~/dev/3leaps/mgmthub/chat/storageprims.md` for `@role:<your-role>` mentions
-8. **Review requests** — `~/dev/3leaps/mgmthub/chat/reviews.md`
+1. **This file** — storageprims operational protocols
+2. **`AGENTS.local.md`** — machine-local overrides and coordination hub paths (gitignored)
+3. **Your role definition** — `config/agentic/roles/<your-role>.yaml`
+4. **Decision records** — `docs/decisions/README.md` for current status of all ADRs/DDRs/SDRs
+5. **Your role state** — `.plans/roles/<your-role>/STATE.md` (if present, gitignored)
+6. **Coordination hub** — see `AGENTS.local.md` for chat channels, review requests, and org-level state
 
 ### Session End
 
-1. Update `~/dev/3leaps/mgmthub/context/<your-role>/STATE.md` with current state.
-2. Write `handoff-YYYY-MM-DD.md` if the next session needs context.
-3. Post to `~/dev/3leaps/mgmthub/chat/storageprims.md` if other roles need to act.
+1. Update `.plans/roles/<your-role>/STATE.md` with current state.
+2. Update org-level role state and chat channels per `AGENTS.local.md` coordination hub instructions.
 
 ## Operating Model
 
@@ -30,6 +27,28 @@ Read these in order before starting any task:
 | Identity       | Per session (no persistent memory)       |
 
 See [agent-identity standard](https://crucible.3leaps.dev/repository/agent-identity) for modes and attribution.
+
+## Roles
+
+Role definitions live in `config/agentic/roles/` and extend
+[crucible baseline roles](https://crucible.3leaps.dev/catalog/roles/) with
+storageprims-specific scope.
+
+See [`config/agentic/roles/README.md`](config/agentic/roles/README.md) for the
+full catalog, selection guide, and escalation paths.
+
+| Role           | Focus                                           | Source                                   |
+| -------------- | ----------------------------------------------- | ---------------------------------------- |
+| `devlead`      | Provider implementation, FFI, integration       | `config/agentic/roles/devlead.yaml`      |
+| `entarch`      | SDK evaluation, decisions, consumer integration | `config/agentic/roles/entarch.yaml`      |
+| `devrev`       | Code review, ADR compliance, parity             | `config/agentic/roles/devrev.yaml`       |
+| `secrev`       | FFI safety, credential handling, auth chains    | `config/agentic/roles/secrev.yaml`       |
+| `qa`           | Cross-provider testing, parity validation       | `config/agentic/roles/qa.yaml`           |
+| `ffiarch`      | Bindings, cross-language integration            | `config/agentic/roles/ffiarch.yaml`      |
+| `deliverylead` | Gate tracking, delivery coordination            | `config/agentic/roles/deliverylead.yaml` |
+| `infoarch`     | Docs, schemas, standards                        | `config/agentic/roles/infoarch.yaml`     |
+| `releng`       | Release workflows, artifact signing             | `config/agentic/roles/releng.yaml`       |
+| `cicd`         | Pipelines, runners, platform matrix             | `config/agentic/roles/cicd.yaml`         |
 
 ## PR Workflow
 
@@ -62,17 +81,6 @@ author (devlead) → devrev (code review)
 - Human always performs the merge.
 - Merge strategy: **rebase-merge** only.
 
-### Review Requests
-
-Post to `~/dev/3leaps/mgmthub/chat/reviews.md`:
-
-```
-**[@role:devlead]** YYYY-MM-DDTHH:MM
-
-PR #N ready for review: <one-line summary>
-@role:devrev please review
-```
-
 ## Multi-Machine Development
 
 This repo is developed on two machines:
@@ -80,7 +88,8 @@ This repo is developed on two machines:
 - **macOS arm64** — primary development
 - **Linux arm64** — Azure storage testing via VPN (Azure Blob only accessible from this machine)
 
-The `~/dev/3leaps/mgmthub/` directory is **not git-backed** — copy manually between machines.
+Both machines share a coordination hub (see `AGENTS.local.md` for location and setup).
+Machine-specific overrides (SSH aliases, etc.) go in `AGENTS.local.md`.
 CI covers both platforms via GitHub Actions.
 
 ## Project Overview
@@ -246,52 +255,8 @@ Changes must maintain uniform behavior across providers:
 | `ffi/storageprims-ffi/`      | C-ABI exports, runtime management                    |
 | `bindings/`                  | Go, TypeScript wrappers                              |
 | `docs/decisions/`            | Decision Records (ADR, DDR, SDR)                     |
+| `config/agentic/roles/`      | Role catalog (YAML prompt definitions)               |
 | `deny.toml`                  | License and security policy                          |
-
-## Roles
-
-Role definitions reference crucible baselines with storageprims-specific extensions.
-
-| Role           | Focus                                 |
-| -------------- | ------------------------------------- |
-| `devlead`      | Implementation, provider parity, FFI  |
-| `deliverylead` | Readiness, delivery coordination      |
-| `secrev`       | Security, credential handling, FFI    |
-| `qa`           | Testing, cross-provider coverage      |
-| `releng`       | CI/CD, platform validation            |
-| `cicd`         | Pipelines, runners, matrix            |
-| `infoarch`     | Docs, schemas, standards              |
-| `ffiarch`      | Bindings, cross-language integration  |
-| `entarch`      | Ecosystem integration, SDK evaluation |
-
-### Role: entarch
-
-Enterprise Architect — Cross-system integration and provider SDK evaluation.
-
-#### Scope
-
-- Provider SDK evaluation (object_store vs individual SDKs)
-- Crucible schema integration
-- rsfulmen error taxonomy alignment
-- Cross-repository coordination (datarakt, gonimbus, fulseed, lanyte)
-
-#### Responsibilities
-
-- Evaluate SDK trade-offs (control vs. convenience)
-- Ensure error taxonomy aligns with rsfulmen foundry patterns
-- Design provider configuration approach
-- Coordinate consumer integration sequencing
-
-#### Escalates To
-
-- **Maintainers** for cross-repository decisions
-- **devlead** for implementation details
-
-#### Does Not
-
-- Implement features (architecture only)
-- Change schemas without Crucible coordination
-- Make unilateral cross-repo decisions
 
 ## Standards Reference
 
