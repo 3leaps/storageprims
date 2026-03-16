@@ -1,0 +1,13 @@
+---
+extends: default
+
+rules:
+  document-start: disable
+  line-length:
+    max: 120
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+  truthy:
+    # GHA uses 'on:' for triggers which yamllint flags as truthy
+    # This is valid YAML and standard GHA syntax
+    allowed-values: ['true', 'false', 'on', 'off']
