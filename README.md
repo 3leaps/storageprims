@@ -15,21 +15,21 @@ storageprims provides a uniform interface for cloud object storage operations, i
 
 Part of the **3leaps prims family**:
 
-| Library          | Domain                                           |
-| ---------------- | ------------------------------------------------ |
-| **sysprims**     | Process control (timeout, signals, inspection)   |
-| **ipcprims**     | IPC channels (async peers, schema validation)    |
-| **docprims**     | Document handling                                |
-| **storageprims** | Cloud object storage                             |
+| Library          | Domain                                         |
+| ---------------- | ---------------------------------------------- |
+| **sysprims**     | Process control (timeout, signals, inspection) |
+| **ipcprims**     | IPC channels (async peers, schema validation)  |
+| **docprims**     | Document handling                              |
+| **storageprims** | Cloud object storage                           |
 
 ## Providers
 
-| Provider                 | URI Scheme                  | Auth                                        |
-| ------------------------ | --------------------------- | ------------------------------------------- |
-| AWS S3 (+ S3-compatible) | `s3://bucket/key`          | AWS SDK default chain, profiles, explicit   |
-| Google Cloud Storage     | `gs://bucket/object`       | Application Default Credentials, SA keys    |
-| Azure Blob Storage       | `azb://account/container/blob` | DefaultAzureCredential, storage keys    |
-| Local filesystem         | `file:///path`             | OS permissions                              |
+| Provider                 | URI Scheme                     | Auth                                      |
+| ------------------------ | ------------------------------ | ----------------------------------------- |
+| AWS S3 (+ S3-compatible) | `s3://bucket/key`              | AWS SDK default chain, profiles, explicit |
+| Google Cloud Storage     | `gs://bucket/object`           | Application Default Credentials, SA keys  |
+| Azure Blob Storage       | `azb://account/container/blob` | DefaultAzureCredential, storage keys      |
+| Local filesystem         | `file:///path`                 | OS permissions                            |
 
 ## Operations
 
@@ -98,12 +98,12 @@ storageprims-ffi           C-ABI exports + runtime management
 
 ## Platform Support
 
-| Platform          | Target                    | Status    |
-| ----------------- | ------------------------- | --------- |
-| Linux x64 glibc   | x86_64-unknown-linux-gnu  | Planned   |
-| Linux arm64 glibc  | aarch64-unknown-linux-gnu | Planned   |
-| macOS arm64        | aarch64-apple-darwin      | Planned   |
-| Windows x64        | x86_64-pc-windows-msvc    | Planned   |
+| Platform          | Target                    | Status  |
+| ----------------- | ------------------------- | ------- |
+| Linux x64 glibc   | x86_64-unknown-linux-gnu  | Planned |
+| Linux arm64 glibc | aarch64-unknown-linux-gnu | Planned |
+| macOS arm64       | aarch64-apple-darwin      | Planned |
+| Windows x64       | x86_64-pc-windows-msvc    | Planned |
 
 ## Development
 

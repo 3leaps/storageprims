@@ -5,10 +5,10 @@ storageprims.
 
 ## Index
 
-| ID | Type | Title | Status | Date |
-| -- | ---- | ----- | ------ | ---- |
-| ADR-0001 | Arch | [Canonical Core Contract and Provider-Neutral Surface](ADR-0001-canonical-core-contract-and-provider-neutral-surface.md) | Proposed | 2026-03-16 |
-| ADR-0003 | Arch | [FFI Design for Metadata and Streaming Data Plane](ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md) | Proposed | 2026-03-16 |
+| ID       | Type   | Title                                                                                                                              | Status   | Date       |
+| -------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------- |
+| ADR-0001 | Arch   | [Canonical Core Contract and Provider-Neutral Surface](ADR-0001-canonical-core-contract-and-provider-neutral-surface.md)           | Proposed | 2026-03-16 |
+| ADR-0003 | Arch   | [FFI Design for Metadata and Streaming Data Plane](ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md)                   | Proposed | 2026-03-16 |
 | DDR-0003 | Design | [List Pagination Semantics and Continuation-Token Contract](DDR-0003-list-pagination-semantics-and-continuation-token-contract.md) | Proposed | 2026-03-16 |
 
 ## Record Types
