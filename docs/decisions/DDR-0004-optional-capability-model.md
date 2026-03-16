@@ -170,11 +170,19 @@ capability discovery for bindings and multi-provider consumers.
 - Multipart should follow closely because it is useful for large transfers and safe write-probe behavior.
 - The capability identifier names used in JSON/FFI should be stable and intentionally small.
 
+## Decision Points
+
+This record should remain `Proposed` until:
+
+- the first provider implementation validates the trait split in real code
+- the FFI and Go binding surfaces prove that capability discovery works cleanly across language boundaries
+- at least one optional capability is exercised end-to-end without bloating the universal trait surface
+
 ## References
 
 - `docs/decisions/ADR-0001-canonical-core-contract-and-provider-neutral-surface.md`
 - `docs/decisions/DDR-0003-list-pagination-semantics-and-continuation-token-contract.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/pkg/provider/capabilities.go`
-- `/Users/davethompson/dev/3leaps/gonimbus/pkg/provider/delimiter.go`
-- `/Users/davethompson/dev/3leaps/gonimbus/pkg/provider/provider.go`
-- `/Users/davethompson/dev/fulmenhq/datarakt/README.md`
+- `https://github.com/3leaps/gonimbus/blob/main/pkg/provider/capabilities.go`
+- `https://github.com/3leaps/gonimbus/blob/main/pkg/provider/delimiter.go`
+- `https://github.com/3leaps/gonimbus/blob/main/pkg/provider/provider.go`
+- `https://github.com/fulmenhq/datarakt/blob/main/README.md`

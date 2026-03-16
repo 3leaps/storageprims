@@ -100,6 +100,11 @@ Capabilities beyond that minimum, including multipart upload support and any fut
 provider-specific accelerators, MUST be modeled as optional capability extensions
 rather than folded into the universal contract.
 
+Object tagging and provider-specific tag metadata are intentionally out of the v0.1
+universal contract. If future consumer pressure justifies exposing tags, they should be
+introduced as an explicit extension or optional capability rather than assumed to be part
+of baseline object access.
+
 ### 4. Provider-native SDKs behind the canonical trait surface
 
 storageprims will use provider-native SDKs behind its own trait and error contracts.
@@ -175,6 +180,15 @@ Therefore:
 - Follow-on ADRs are still needed for FFI design, dependency governance, error taxonomy, and binding distribution.
 - Existing bootstrap code will need a small refactor to align with this contract.
 
+## Decision Points
+
+This record should remain `Proposed` until:
+
+- `storageprims-core` implements the single provider enum and provider-neutral target model
+- the 7-operation universal surface is exercised by the first provider implementation
+- deliverylead, entarch, and devlead confirm that the implemented contract still matches the
+  accepted datarakt-first boundary
+
 ## Alternatives Considered
 
 ### Alternative 1: Use `object_store` as the primary abstraction
@@ -208,8 +222,8 @@ semantics, making the contract less honest and harder to explain across language
 - `.plans/bootstrap/adr-roadmap.md`
 - `crates/storageprims-core/src/error.rs`
 - `crates/storageprims-core/src/uri.rs`
-- `/Users/davethompson/dev/3leaps/sysprims/docs/decisions/ADR-0004-ffi-design.md`
-- `/Users/davethompson/dev/3leaps/sysprims/docs/decisions/ADR-0008-error-handling.md`
-- `/Users/davethompson/dev/3leaps/sysprims/docs/decisions/ADR-0012-language-bindings-distribution.md`
-- `/Users/davethompson/dev/3leaps/ipcprims/docs/decisions/DDR-0001-transport-scope.md`
-- `/Users/davethompson/dev/3leaps/ipcprims/docs/decisions/SDR-0001-schema-validation-scope.md`
+- `https://github.com/3leaps/sysprims/blob/main/docs/decisions/ADR-0004-ffi-design.md`
+- `https://github.com/3leaps/sysprims/blob/main/docs/decisions/ADR-0008-error-handling.md`
+- `https://github.com/3leaps/sysprims/blob/main/docs/decisions/ADR-0012-language-bindings-distribution.md`
+- `https://github.com/3leaps/ipcprims/blob/main/docs/decisions/DDR-0001-transport-scope.md`
+- `https://github.com/3leaps/ipcprims/blob/main/docs/decisions/SDR-0001-schema-validation-scope.md`

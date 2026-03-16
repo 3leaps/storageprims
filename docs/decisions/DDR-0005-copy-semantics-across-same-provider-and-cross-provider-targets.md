@@ -1,6 +1,6 @@
 # DDR-0005: Copy Semantics Across Same-Provider and Cross-Provider Targets
 
-> **Status**: Proposed
+> **Status**: Approved
 > **Date**: 2026-03-16
 > **Authors**: entarch, deliverylead, devlead, Architecture Council
 
@@ -184,6 +184,16 @@ That would collapse storage access and data transformation into one overloaded o
 - Relay copy should be implemented on the same streaming foundation as `get` and `put`.
 - If native copy cannot meet the expected semantics, storageprims should fall back to relay rather than exposing provider-specific surprises as the contract.
 
+## Decision Points
+
+This record is `Approved` on current evidence.
+
+Re-open or supersede it if:
+
+- implementation shows that native copy and relay cannot share one clean public `copy` semantic
+- callers need explicit strategy control in the public API to make copy workable
+- launch consumers require transform-in-copy semantics from the storageprims core contract
+
 ## References
 
 - `docs/decisions/ADR-0001-canonical-core-contract-and-provider-neutral-surface.md`
@@ -191,4 +201,4 @@ That would collapse storage access and data transformation into one overloaded o
 - `docs/decisions/ADR-0004-error-taxonomy-and-cross-provider-mapping.md`
 - `docs/decisions/DDR-0004-optional-capability-model.md`
 - `docs/decisions/DDR-0007-binary-first-remote-text-inspection-and-helper-boundary.md`
-- `/Users/davethompson/dev/fulmenhq/datarakt/README.md`
+- `https://github.com/fulmenhq/datarakt/blob/main/README.md`

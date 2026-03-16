@@ -1,6 +1,6 @@
 # ADR-0003: FFI Design for Metadata and Streaming Data Plane
 
-> **Status**: Proposed
+> **Status**: Approved
 > **Date**: 2026-03-16
 > **Authors**: entarch, ffiarch, deliverylead, Architecture Council
 
@@ -117,6 +117,11 @@ The FFI surface MUST use:
 Error codes represent coarse classes suitable for bindings. Richer provider/context detail
 is carried in the canonical Rust error taxonomy and reflected into JSON/error detail.
 
+The single source of truth for FFI-facing error codes SHOULD be a code-defined enum or constant
+set in shared storageprims Rust code, exported consistently through the FFI layer and bindings.
+Schema-driven code definitions are intentionally deferred; v0 should remain code-first so error
+codes evolve with the canonical error taxonomy in one place.
+
 ### 6. Runtime and ownership rules
 
 The FFI crate owns the async runtime used to drive provider I/O for FFI consumers.
@@ -164,6 +169,16 @@ Follow-on design work still needs to specify:
 - Native Rust consumers can bypass this FFI layer entirely while preserving equivalent semantics.
 - Additional SDR work is still needed for stream/resource hardening.
 
+## Decision Points
+
+This record is `Approved` on current evidence.
+
+Re-open or supersede it if:
+
+- the implemented FFI layer needs a materially different control-plane or data-plane split
+- error-code constants cannot be maintained from one shared storageprims source of truth
+- Go bindings or other consumers show that the lifecycle model is impractical in real use
+
 ## Alternatives Considered
 
 ### Alternative 1: JSON for everything, including content bytes
@@ -199,7 +214,7 @@ better fit for the downstream consumers we know about.
 - `docs/decisions/ADR-0001-canonical-core-contract-and-provider-neutral-surface.md`
 - `.plans/bootstrap/architecture.md`
 - `.plans/bootstrap/integration.md`
-- `/Users/davethompson/dev/3leaps/sysprims/docs/decisions/ADR-0004-ffi-design.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/docs/development/streaming/stream-contract.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/docs/architecture/adr/ADR-0004-language-neutral-content-stream-contract.md`
-- `/Users/davethompson/dev/fulmenhq/datarakt/README.md`
+- `https://github.com/3leaps/sysprims/blob/main/docs/decisions/ADR-0004-ffi-design.md`
+- `https://github.com/3leaps/gonimbus/blob/main/docs/development/streaming/stream-contract.md`
+- `https://github.com/3leaps/gonimbus/blob/main/docs/architecture/adr/ADR-0004-language-neutral-content-stream-contract.md`
+- `https://github.com/fulmenhq/datarakt/blob/main/README.md`

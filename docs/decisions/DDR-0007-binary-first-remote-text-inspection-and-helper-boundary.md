@@ -1,6 +1,6 @@
 # DDR-0007: Binary-First Remote Text Inspection and Helper Boundary
 
-> **Status**: Proposed
+> **Status**: Approved
 > **Date**: 2026-03-16
 > **Authors**: entarch, deliverylead, Architecture Council
 
@@ -163,10 +163,20 @@ The core premise remains correct, but a small shared helper layer is justified i
 - CSV/PSV parser semantics should stay outside that helper initially.
 - Datarakt should be the proving ground before any helper is generalized for wider reuse.
 
+## Decision Points
+
+This record is `Approved` on current evidence.
+
+Re-open or supersede it if:
+
+- real large-file inspection shows byte-first primitives are insufficient for launch needs
+- helper-layer design work reveals that the split above storageprims core is not stable in practice
+- launch implementation pressure requires storageprims itself to become text- or record-oriented
+
 ## References
 
 - `.plans/bootstrap/datarakt-driver.md`
 - `docs/decisions/ADR-0001-canonical-core-contract-and-provider-neutral-surface.md`
 - `docs/decisions/ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md`
 - `docs/decisions/DDR-0006-provider-configuration-surface-and-credential-representation.md`
-- `/Users/davethompson/dev/fulmenhq/datarakt/README.md`
+- `https://github.com/fulmenhq/datarakt/blob/main/README.md`

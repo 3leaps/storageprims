@@ -1,6 +1,6 @@
 # ADR-0002: Crate Structure and Library-First Adapter Boundaries
 
-> **Status**: Proposed
+> **Status**: Approved
 > **Date**: 2026-03-16
 > **Authors**: entarch, deliverylead, devlead, Architecture Council
 
@@ -50,6 +50,10 @@ Planned provider crates:
 - `crates/storageprims-local`
 
 Each provider crate owns provider-native SDK integration and mapping into the canonical core surface.
+
+`storageprims-s3` is AWS S3 first. S3-compatible providers may be supported through explicit
+endpoint/auth configuration, but that support must not degrade AWS-native defaults, auth chains,
+or semantics in the core implementation.
 
 Provider crates MUST depend on `storageprims-core`.
 `storageprims-core` MUST NOT depend on provider crates.
@@ -215,6 +219,16 @@ This is part of the anti-drift strategy.
 - Makes adapter code thinner and therefore less free to solve local convenience problems ad hoc.
 - Increases pressure on core crate design quality because more surfaces depend on it.
 
+## Decision Points
+
+This record is `Approved` on current evidence.
+
+Re-open or supersede it if:
+
+- the workspace structure changes materially enough to alter crate or adapter boundaries
+- adapter work starts introducing CLI-only or control-plane-only storage semantics
+- day-to-day implementation shows the anti-drift rules are impractical or too restrictive
+
 ## Alternatives Considered
 
 ### Alternative 1: Treat CLI as the main implementation surface and expose library features opportunistically
@@ -240,9 +254,9 @@ That would fragment the binding surface and duplicate adapter logic across langu
 - `Cargo.toml`
 - `docs/decisions/ADR-0001-canonical-core-contract-and-provider-neutral-surface.md`
 - `docs/decisions/ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md`
-- `/Users/davethompson/dev/3leaps/crucible/docs/coding/baseline.md`
-- `/Users/davethompson/dev/3leaps/crucible/docs/coding/rust.md`
-- `/Users/davethompson/dev/3leaps/crucible/docs/coding/go.md`
-- `/Users/davethompson/dev/3leaps/crucible/docs/knowledge/testing/README.md`
-- `/Users/davethompson/dev/3leaps/crucible/docs/knowledge/toolchains/rust/ffi-bindings-setup.md`
-- `/Users/davethompson/dev/3leaps/crucible/docs/sop/stream-output.md`
+- `https://github.com/3leaps/crucible/blob/main/docs/coding/baseline.md`
+- `https://github.com/3leaps/crucible/blob/main/docs/coding/rust.md`
+- `https://github.com/3leaps/crucible/blob/main/docs/coding/go.md`
+- `https://github.com/3leaps/crucible/blob/main/docs/knowledge/testing/README.md`
+- `https://github.com/3leaps/crucible/blob/main/docs/knowledge/toolchains/rust/ffi-bindings-setup.md`
+- `https://github.com/3leaps/crucible/blob/main/docs/sop/stream-output.md`

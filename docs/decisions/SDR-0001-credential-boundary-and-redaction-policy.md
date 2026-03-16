@@ -162,6 +162,14 @@ This residual risk is acceptable because separate-process operation requires som
 
 The mitigation is to make those channels explicit, bounded, and redacted rather than pretending they do not exist.
 
+## Decision Points
+
+This record should remain `Proposed` until:
+
+- SP-004 implements the FFI/config channels that carry credential material
+- secrev verifies redaction and channel-classification behavior on the implemented FFI/control-plane paths
+- tests demonstrate that logs, error output, and debug rendering do not leak secret-bearing values
+
 ## Alternatives Considered
 
 ### Alternative 1: Ban inline secret transport entirely
@@ -185,8 +193,8 @@ That would expand the trust boundary and blur library responsibilities.
 ## References
 
 - `docs/decisions/DDR-0006-provider-configuration-surface-and-credential-representation.md`
-- `/Users/davethompson/dev/3leaps/seclusor/docs/decisions/SDR-0002-secret-input-channels-and-cli-arg-policy.md`
-- `/Users/davethompson/dev/3leaps/seclusor/docs/appnotes/02-runtime-deployment-patterns.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/docs/auth/aws-profiles.md`
-- `/Users/davethompson/dev/fulmenhq/fulseed/docs/guides/s3/authentication.md`
-- `/Users/davethompson/dev/fulmenhq/fulseed/docs/guides/gcs/authentication.md`
+- `https://github.com/3leaps/seclusor/blob/main/docs/decisions/SDR-0002-secret-input-channels-and-cli-arg-policy.md`
+- `https://github.com/3leaps/seclusor/blob/main/docs/appnotes/02-runtime-deployment-patterns.md`
+- `https://github.com/3leaps/gonimbus/blob/main/docs/auth/aws-profiles.md`
+- `https://github.com/fulmenhq/fulseed/blob/main/docs/guides/s3/authentication.md`
+- `https://github.com/fulmenhq/fulseed/blob/main/docs/guides/gcs/authentication.md`

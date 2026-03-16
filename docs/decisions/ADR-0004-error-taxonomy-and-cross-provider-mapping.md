@@ -147,6 +147,14 @@ to tell the difference between:
 - Some operation-specific error nuances will be refined by later DDRs.
 - Bindings may add convenience subclasses/wrappers as long as the canonical class remains visible.
 
+## Decision Points
+
+This record should remain `Proposed` until:
+
+- the first provider implementations exercise the agreed classes against real SDK errors
+- not-found, credential, throttling, and conflict mappings are validated across at least S3 and one non-S3 provider
+- the FFI and Go bindings consume the same canonical classes without inventing alternate taxonomies
+
 ## Alternatives Considered
 
 ### Alternative 1: Expose raw provider SDK errors through wrappers
@@ -171,8 +179,8 @@ That would make production debugging and conformance work unnecessarily difficul
 
 - `docs/decisions/ADR-0001-canonical-core-contract-and-provider-neutral-surface.md`
 - `docs/decisions/ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md`
-- `/Users/davethompson/dev/3leaps/sysprims/docs/decisions/ADR-0008-error-handling.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/docs/architecture/indexing.md`
-- `/Users/davethompson/dev/3leaps/gonimbus/docs/architecture/adr/ADR-0003-index-build-provider-capabilities.md`
-- `/Users/davethompson/dev/fulmenhq/datarakt/README.md`
-- `/Users/davethompson/dev/fulmenhq/fulseed/contracts/contracts.go`
+- `https://github.com/3leaps/sysprims/blob/main/docs/decisions/ADR-0008-error-handling.md`
+- `https://github.com/3leaps/gonimbus/blob/main/docs/architecture/indexing.md`
+- `https://github.com/3leaps/gonimbus/blob/main/docs/architecture/adr/ADR-0003-index-build-provider-capabilities.md`
+- `https://github.com/fulmenhq/datarakt/blob/main/README.md`
+- `https://github.com/fulmenhq/fulseed/blob/main/contracts/contracts.go`
