@@ -1,0 +1,24 @@
+version: "1.0.0"
+hooks:
+  pre-commit:
+    - command: "assess"
+      args:
+        - "--check"
+        - "--categories"
+        - "format,lint,typecheck,dependencies"
+        - "--fail-on"
+        - "critical"
+        - "--lint-new-from-rev"
+        - "HEAD~"
+      priority: 10
+      timeout: "90s"
+  pre-push:
+    - command: "assess"
+      args: ["--check", "--categories", "format,lint,typecheck,security,dependencies,repo-status", "--fail-on", "high"]
+      priority: 10
+      timeout: "2m"
+optimization:
+  cache_results: true
+  content_source: working
+  only_changed_files: false
+  parallel: auto

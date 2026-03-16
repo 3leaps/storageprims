@@ -1,0 +1,75 @@
+# goneat assess configuration for storageprims
+# Rust project with FFI bindings
+#
+# goneat lint can run Rust clippy when Rust toolchain/clippy are available.
+# We still keep strict Rust gates in Makefile (cargo fmt --check and
+# cargo clippy --workspace --all-targets -- -D warnings) for parity
+# with repository quality expectations.
+#
+# This config primarily scopes additional non-Rust lint checks.
+# Keep comments current with the installed goneat release.
+version: 1
+# Rust toolchain checks - FUTURE (goneat v0.4.1+)
+# rust:
+#   fmt:
+#     enabled: true
+#     fix: true
+#   clippy:
+#     enabled: true
+#     deny_warnings: true
+#   deny:
+#     enabled: true
+#     checks: [licenses, advisories, bans, sources]
+#   paths:
+#     - "crates/**/*.rs"
+#     - "ffi/**/*.rs"
+#   ignore:
+#     - "**/target/**"
+lint:
+  # YAML linting (CI workflows, configs)
+  yamllint:
+    enabled: true
+    strict: true
+    paths:
+      - ".github/workflows/**/*.yml"
+      - ".github/workflows/**/*.yaml"
+      - ".goneat/**/*.yaml"
+    ignore: []
+  # Shell script linting
+  shell:
+    shfmt:
+      enabled: true
+      fix: true
+    shellcheck:
+      enabled: false
+      path: ""
+    paths:
+      - "**/*.sh"
+      - "scripts/**/*.sh"
+    ignore:
+      - "**/target/**"
+      - "**/.git/**"
+      - ".plans/**"
+  # GitHub Actions linting
+  github_actions:
+    actionlint:
+      enabled: true
+      paths:
+        - ".github/workflows/**/*.yml"
+        - ".github/workflows/**/*.yaml"
+      ignore: []
+  # Makefile linting
+  make:
+    checkmake:
+      enabled: true
+      config:
+        max_body_length: 75
+        min_phony_targets:
+          - all
+          - clean
+          - test
+          - check
+          - build
+    paths:
+      - "**/Makefile"
+    ignore: []
