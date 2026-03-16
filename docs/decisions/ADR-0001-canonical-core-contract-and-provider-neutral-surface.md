@@ -1,6 +1,6 @@
 # ADR-0001: Canonical Core Contract and Provider-Neutral Surface
 
-> **Status**: Proposed
+> **Status**: Approved
 > **Date**: 2026-03-16
 > **Authors**: entarch, deliverylead, Architecture Council
 
@@ -182,12 +182,14 @@ Therefore:
 
 ## Decision Points
 
-This record should remain `Proposed` until:
+This record is `Approved` on current evidence.
 
-- `storageprims-core` implements the single provider enum and provider-neutral target model
-- the 7-operation universal surface is exercised by the first provider implementation
-- deliverylead, entarch, and devlead confirm that the implemented contract still matches the
-  accepted datarakt-first boundary
+Re-open or supersede it if:
+
+- the implemented core contract proves insufficient or unstable under the first provider work
+- the 7-operation universal surface requires a breaking semantic change before launch
+- deliverylead, entarch, and devlead determine that real implementation pressure invalidates the
+  accepted datarakt-first boundary captured here
 
 ## Alternatives Considered
 
