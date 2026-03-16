@@ -44,6 +44,7 @@ storageprims uses a PR-based workflow — no direct pushes to `main`.
 Types: `feat`, `fix`, `docs`, `chore`, `test`, `refactor`, `security`
 
 Examples:
+
 - `feat/s3-provider-devlead-20260317`
 - `docs/adr-0001-entarch-20260316`
 - `fix/uri-parsing-azure-devrev-20260320`
@@ -64,6 +65,7 @@ author (devlead) → devrev (code review)
 ### Review Requests
 
 Post to `~/dev/3leaps/mgmthub/chat/reviews.md`:
+
 ```
 **[@role:devlead]** YYYY-MM-DDTHH:MM
 
@@ -74,6 +76,7 @@ PR #N ready for review: <one-line summary>
 ## Multi-Machine Development
 
 This repo is developed on two machines:
+
 - **macOS arm64** — primary development
 - **Linux arm64** — Azure storage testing via VPN (Azure Blob only accessible from this machine)
 
@@ -232,34 +235,34 @@ Changes must maintain uniform behavior across providers:
 
 ## Key Files
 
-| Path                           | Purpose                                            |
-| ------------------------------ | -------------------------------------------------- |
-| `crates/storageprims-core/`    | Core traits, error types, URI parsing, provider enum |
-| `crates/storageprims-s3/`      | AWS S3 implementation                              |
-| `crates/storageprims-gcs/`     | Google Cloud Storage implementation                |
-| `crates/storageprims-azb/`     | Azure Blob Storage implementation                  |
-| `crates/storageprims-local/`   | Local filesystem provider                          |
-| `crates/storageprims-cli/`     | Diagnostic CLI                                     |
-| `ffi/storageprims-ffi/`        | C-ABI exports, runtime management                  |
-| `bindings/`                    | Go, TypeScript wrappers                            |
-| `docs/decisions/`              | Decision Records (ADR, DDR, SDR)                   |
-| `deny.toml`                    | License and security policy                        |
+| Path                         | Purpose                                              |
+| ---------------------------- | ---------------------------------------------------- |
+| `crates/storageprims-core/`  | Core traits, error types, URI parsing, provider enum |
+| `crates/storageprims-s3/`    | AWS S3 implementation                                |
+| `crates/storageprims-gcs/`   | Google Cloud Storage implementation                  |
+| `crates/storageprims-azb/`   | Azure Blob Storage implementation                    |
+| `crates/storageprims-local/` | Local filesystem provider                            |
+| `crates/storageprims-cli/`   | Diagnostic CLI                                       |
+| `ffi/storageprims-ffi/`      | C-ABI exports, runtime management                    |
+| `bindings/`                  | Go, TypeScript wrappers                              |
+| `docs/decisions/`            | Decision Records (ADR, DDR, SDR)                     |
+| `deny.toml`                  | License and security policy                          |
 
 ## Roles
 
 Role definitions reference crucible baselines with storageprims-specific extensions.
 
-| Role           | Focus                                  |
-| -------------- | -------------------------------------- |
-| `devlead`      | Implementation, provider parity, FFI   |
-| `deliverylead` | Readiness, delivery coordination       |
-| `secrev`       | Security, credential handling, FFI     |
-| `qa`           | Testing, cross-provider coverage       |
-| `releng`       | CI/CD, platform validation             |
-| `cicd`         | Pipelines, runners, matrix             |
-| `infoarch`     | Docs, schemas, standards               |
-| `ffiarch`      | Bindings, cross-language integration   |
-| `entarch`      | Ecosystem integration, SDK evaluation  |
+| Role           | Focus                                 |
+| -------------- | ------------------------------------- |
+| `devlead`      | Implementation, provider parity, FFI  |
+| `deliverylead` | Readiness, delivery coordination      |
+| `secrev`       | Security, credential handling, FFI    |
+| `qa`           | Testing, cross-provider coverage      |
+| `releng`       | CI/CD, platform validation            |
+| `cicd`         | Pipelines, runners, matrix            |
+| `infoarch`     | Docs, schemas, standards              |
+| `ffiarch`      | Bindings, cross-language integration  |
+| `entarch`      | Ecosystem integration, SDK evaluation |
 
 ### Role: entarch
 
