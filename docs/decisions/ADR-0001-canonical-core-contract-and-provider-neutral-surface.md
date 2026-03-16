@@ -36,14 +36,15 @@ appears.
 ## Decision
 
 storageprims adopts a provider-neutral canonical core contract owned by
-`storageprims-core`, and all provider crates, FFI surfaces, and language bindings MUST
-conform to it.
+`storageprims-core`, and all provider crates, adapters, FFI surfaces, and language
+bindings MUST conform to it.
 
 ### 1. One canonical provider identity
 
 storageprims MUST expose a single public provider enum across:
 
 - Rust library APIs
+- Utility CLI and adapter-visible representations where provider identity is exposed
 - FFI error codes and JSON payloads
 - Binding-layer types in Go and TypeScript
 - Documentation and examples
