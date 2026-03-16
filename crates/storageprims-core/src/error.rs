@@ -1,19 +1,18 @@
-//! Canonical error type for storageprims.
-//!
-//! All provider implementations map their errors into `StorageError` variants.
-//! Consumers handle uniform error types regardless of provider.
+//! Canonical error and provider types for storageprims.
 
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-/// Cloud storage provider type identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+use crate::provider::Capability;
+
+/// Canonical cloud storage provider identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     S3,
     Gcs,
-    Azure,
+    AzureBlob,
     Local,
 }
 
@@ -22,69 +21,197 @@ impl std::fmt::Display for ProviderKind {
         match self {
             Self::S3 => write!(f, "s3"),
             Self::Gcs => write!(f, "gcs"),
-            Self::Azure => write!(f, "azure"),
+            Self::AzureBlob => write!(f, "azure_blob"),
             Self::Local => write!(f, "local"),
         }
     }
 }
 
+/// Canonical storage operation identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageOperation {
+    List,
+    Head,
+    Get,
+    GetRange,
+    Put,
+    Delete,
+    Copy,
+    ConfigureProvider,
+    ParseUri,
+}
+
+impl std::fmt::Display for StorageOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::List => write!(f, "list"),
+            Self::Head => write!(f, "head"),
+            Self::Get => write!(f, "get"),
+            Self::GetRange => write!(f, "get_range"),
+            Self::Put => write!(f, "put"),
+            Self::Delete => write!(f, "delete"),
+            Self::Copy => write!(f, "copy"),
+            Self::ConfigureProvider => write!(f, "configure_provider"),
+            Self::ParseUri => write!(f, "parse_uri"),
+        }
+    }
+}
+
+/// Stable error codes for FFI and bindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageErrorCode {
+    InvalidUri,
+    InvalidArgument,
+    NotFound,
+    ContainerNotFound,
+    AccessDenied,
+    InvalidCredentials,
+    Throttled,
+    ProviderUnavailable,
+    UnsupportedCapability,
+    Conflict,
+    Io,
+    Other,
+}
+
 /// Canonical error type for all storageprims operations.
-///
-/// Maps provider-specific errors into uniform variants that consumers
-/// can handle without knowledge of the underlying provider.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
-    #[error("{provider}: object not found: {key}")]
-    NotFound { key: String, provider: ProviderKind },
+    #[error("invalid URI: {uri} - {reason}")]
+    InvalidUri { uri: String, reason: String },
 
-    #[error("{provider}: access denied: {key} — {detail}")]
-    AccessDenied {
-        key: String,
+    #[error("invalid argument for {operation:?}: {argument} - {reason}")]
+    InvalidArgument {
+        operation: Option<StorageOperation>,
+        argument: String,
+        reason: String,
+    },
+
+    #[error("{provider} {operation}: object not found: {path}")]
+    NotFound {
         provider: ProviderKind,
+        operation: StorageOperation,
+        path: String,
+    },
+
+    #[error("{provider} {operation}: container not found: {container}")]
+    ContainerNotFound {
+        provider: ProviderKind,
+        operation: StorageOperation,
+        container: String,
+    },
+
+    #[error("{provider} {operation}: access denied: {detail}")]
+    AccessDenied {
+        provider: ProviderKind,
+        operation: StorageOperation,
+        target: Option<String>,
         detail: String,
     },
 
-    #[error("{provider}: bucket not found: {bucket}")]
-    BucketNotFound {
-        bucket: String,
-        provider: ProviderKind,
-    },
-
-    #[error("{provider}: invalid credentials — {detail}")]
+    #[error("{provider}: invalid credentials - {detail}")]
     InvalidCredentials {
         provider: ProviderKind,
         detail: String,
     },
 
-    #[error("{provider}: throttled (retry after {retry_after:?})")]
+    #[error("{provider} {operation}: throttled (retry after {retry_after:?})")]
     Throttled {
         provider: ProviderKind,
+        operation: StorageOperation,
         retry_after: Option<Duration>,
     },
 
-    #[error("{provider}: provider unavailable — {detail}")]
+    #[error("{provider} {operation}: provider unavailable - {detail}")]
     ProviderUnavailable {
         provider: ProviderKind,
+        operation: StorageOperation,
         detail: String,
     },
 
-    #[error("invalid URI: {uri} — {reason}")]
-    InvalidUri { uri: String, reason: String },
+    #[error("{provider} {operation}: unsupported capability: {capability:?}")]
+    UnsupportedCapability {
+        provider: ProviderKind,
+        operation: StorageOperation,
+        capability: Capability,
+    },
 
-    #[error("I/O error: {source}")]
+    #[error("{provider} {operation}: conflict: {detail}")]
+    Conflict {
+        provider: ProviderKind,
+        operation: StorageOperation,
+        target: Option<String>,
+        detail: String,
+    },
+
+    #[error("I/O error during {operation:?}: {source}")]
     Io {
-        #[from]
+        operation: Option<StorageOperation>,
+        #[source]
         source: std::io::Error,
     },
 
-    #[error("{provider}: {detail}")]
+    #[error("{detail}")]
     Other {
-        provider: ProviderKind,
+        provider: Option<ProviderKind>,
+        operation: Option<StorageOperation>,
         detail: String,
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 }
 
+impl StorageError {
+    pub fn code(&self) -> StorageErrorCode {
+        StorageErrorCode::from(self)
+    }
+}
+
+impl From<&StorageError> for StorageErrorCode {
+    fn from(value: &StorageError) -> Self {
+        match value {
+            StorageError::InvalidUri { .. } => Self::InvalidUri,
+            StorageError::InvalidArgument { .. } => Self::InvalidArgument,
+            StorageError::NotFound { .. } => Self::NotFound,
+            StorageError::ContainerNotFound { .. } => Self::ContainerNotFound,
+            StorageError::AccessDenied { .. } => Self::AccessDenied,
+            StorageError::InvalidCredentials { .. } => Self::InvalidCredentials,
+            StorageError::Throttled { .. } => Self::Throttled,
+            StorageError::ProviderUnavailable { .. } => Self::ProviderUnavailable,
+            StorageError::UnsupportedCapability { .. } => Self::UnsupportedCapability,
+            StorageError::Conflict { .. } => Self::Conflict,
+            StorageError::Io { .. } => Self::Io,
+            StorageError::Other { .. } => Self::Other,
+        }
+    }
+}
+
+impl From<std::io::Error> for StorageError {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io {
+            operation: None,
+            source,
+        }
+    }
+}
+
 /// Result type alias for storageprims operations.
 pub type Result<T> = std::result::Result<T, StorageError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_error_code_maps_from_error() {
+        let error = StorageError::ContainerNotFound {
+            provider: ProviderKind::S3,
+            operation: StorageOperation::Head,
+            container: "missing-bucket".to_string(),
+        };
+
+        assert_eq!(error.code(), StorageErrorCode::ContainerNotFound);
+    }
+}

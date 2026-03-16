@@ -7,7 +7,7 @@ storageprims.
 
 | ID       | Type     | Title                                                                                                                                        | Status   | Date       |
 | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------- |
-| ADR-0001 | Arch     | [Canonical Core Contract and Provider-Neutral Surface](ADR-0001-canonical-core-contract-and-provider-neutral-surface.md)                     | Proposed | 2026-03-16 |
+| ADR-0001 | Arch     | [Canonical Core Contract and Provider-Neutral Surface](ADR-0001-canonical-core-contract-and-provider-neutral-surface.md)                     | Approved | 2026-03-16 |
 | ADR-0002 | Arch     | [Crate Structure and Library-First Adapter Boundaries](ADR-0002-crate-structure-and-library-first-adapter-boundaries.md)                     | Approved | 2026-03-16 |
 | ADR-0003 | Arch     | [FFI Design for Metadata and Streaming Data Plane](ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md)                             | Approved | 2026-03-16 |
 | ADR-0004 | Arch     | [Error Taxonomy and Cross-Provider Mapping](ADR-0004-error-taxonomy-and-cross-provider-mapping.md)                                           | Proposed | 2026-03-16 |

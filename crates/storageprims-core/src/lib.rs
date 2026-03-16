@@ -1,11 +1,16 @@
-//! storageprims-core — Core traits, error types, and URI parsing for cloud storage primitives.
-//!
-//! This crate defines the `StorageProvider` trait that all provider implementations
-//! (S3, GCS, Azure, local) must satisfy, along with the canonical `StorageError` type
-//! and `StorageUri` parser.
+//! storageprims-core - Core traits, config types, error types, and URI parsing.
 
+pub mod config;
 pub mod error;
+pub mod provider;
+pub mod types;
 pub mod uri;
 
-pub use error::StorageError;
-pub use uri::{ProviderType, StorageUri};
+pub use config::{CredentialSource, ProviderConfig, TargetConfig};
+pub use error::{ProviderKind, Result, StorageError, StorageErrorCode, StorageOperation};
+pub use provider::{BoxFuture, BoxedByteStream, Capability, StorageProvider};
+pub use types::{
+    CopyRequest, CopyResult, CopyStrategy, GetRangeRequest, ListOptions, ListResult,
+    ObjectMetadata, ObjectSummary, PutOptions, PutResult,
+};
+pub use uri::StorageUri;
