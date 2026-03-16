@@ -1,0 +1,81 @@
+name: check
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings"
+# MSRV: 1.89.0 (workspace Cargo.toml rust-version)
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  lint:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest-arm64-s
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: cargo test --workspace --all-features
+
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest-arm64-s
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release
+        run: cargo build --workspace --release
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  msrv:
+    name: MSRV (1.89.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.89.0"
+      - name: MSRV check
+        run: cargo check --workspace

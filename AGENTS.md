@@ -1,11 +1,23 @@
 # storageprims - AI Agent Guide
 
-## Read First
+## Warm-Up Sequence
 
-1. Check `AGENTS.local.md` if it exists (gitignored, tactical session guidance)
-2. Read `MAINTAINERS.md` for contacts and governance
-3. Review this document for operational protocols
-4. Understand: this is a **Rust library with cross-language bindings** — correctness and uniform behavior across providers is paramount
+Read these in order before starting any task:
+
+1. **`~/dev/3leaps/mgmthub/AGENTS.md`** — org-level layout and invariants
+2. **`~/dev/3leaps/mgmthub/AGENTS.local.md`** — machine-local overrides (if present)
+3. **This file** — storageprims operational protocols
+4. **`AGENTS.local.md`** — session-specific guidance (if present, gitignored)
+5. **Your role's context** — `~/dev/3leaps/mgmthub/context/<your-role>/STATE.md`
+6. **Productbook stream** — `~/dev/3leaps/3leaps-productbook-internal/content/projmgmt/storageprims/index.md`
+7. **Pending messages** — `~/dev/3leaps/mgmthub/chat/storageprims.md` for `@role:<your-role>` mentions
+8. **Review requests** — `~/dev/3leaps/mgmthub/chat/reviews.md`
+
+### Session End
+
+1. Update `~/dev/3leaps/mgmthub/context/<your-role>/STATE.md` with current state.
+2. Write `handoff-YYYY-MM-DD.md` if the next session needs context.
+3. Post to `~/dev/3leaps/mgmthub/chat/storageprims.md` if other roles need to act.
 
 ## Operating Model
 
@@ -18,6 +30,55 @@
 | Identity       | Per session (no persistent memory)       |
 
 See [agent-identity standard](https://crucible.3leaps.dev/repository/agent-identity) for modes and attribution.
+
+## PR Workflow
+
+storageprims uses a PR-based workflow — no direct pushes to `main`.
+
+### Branch Naming
+
+```
+<type>/<slug>-<role>-YYYYMMDD
+```
+
+Types: `feat`, `fix`, `docs`, `chore`, `test`, `refactor`, `security`
+
+Examples:
+- `feat/s3-provider-devlead-20260317`
+- `docs/adr-0001-entarch-20260316`
+- `fix/uri-parsing-azure-devrev-20260320`
+
+### Review Flow
+
+```
+author (devlead) → devrev (code review)
+                       ├→ secrev (if FFI, auth, unsafe, credentials)
+                       └→ human merge (@3leapsdave rebase-merges)
+```
+
+- All PRs require at least one agent review (devrev).
+- FFI boundary changes, `unsafe`, credential handling, and provider auth trigger secrev.
+- Human always performs the merge.
+- Merge strategy: **rebase-merge** only.
+
+### Review Requests
+
+Post to `~/dev/3leaps/mgmthub/chat/reviews.md`:
+```
+**[@role:devlead]** YYYY-MM-DDTHH:MM
+
+PR #N ready for review: <one-line summary>
+@role:devrev please review
+```
+
+## Multi-Machine Development
+
+This repo is developed on two machines:
+- **macOS arm64** — primary development
+- **Linux arm64** — Azure storage testing via VPN (Azure Blob only accessible from this machine)
+
+The `~/dev/3leaps/mgmthub/` directory is **not git-backed** — copy manually between machines.
+CI covers both platforms via GitHub Actions.
 
 ## Project Overview
 
@@ -130,12 +191,15 @@ Committer-of-Record: @3leapsdave
 
 ### Never Push Without Approval
 
-Git push operations require explicit, per-incident human maintainer approval:
+All work lands via PR. Push to feature branches freely; push to `main` is blocked by branch protection.
 
 ```bash
-git add <files>       # OK
-git commit -m "..."   # OK
-git push              # NEVER without explicit approval
+git checkout -b feat/my-change-devlead-20260317   # Create feature branch
+git add <files>                                    # OK
+git commit -m "..."                                # OK
+git push -u origin HEAD                            # OK (pushes feature branch)
+# Then: gh pr create ...                           # Open PR for review
+# main push is blocked — human rebase-merges via GitHub
 ```
 
 ### License Compliance
