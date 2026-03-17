@@ -10,7 +10,7 @@
 #   make fmt        - Format code (cargo fmt + goneat format)
 #   make build      - Build all crates
 
-.PHONY: all help bootstrap bootstrap-force tools check test fmt fmt-check lint build clean version
+.PHONY: all help bootstrap bootstrap-force tools check test test-integration-s3 fmt fmt-check lint build clean version
 .PHONY: precommit prepush deny audit msrv
 .PHONY: build-release build-ffi cbindgen
 .PHONY: build-local-go build-local-ffi-shared go-test header-go
@@ -72,6 +72,7 @@ help: ## Show available targets
 	@echo "Quality gates:"
 	@echo "  check           Run all quality checks (fmt, lint, test, deny)"
 	@echo "  test            Run test suite"
+	@echo "  test-integration-s3  Run S3 LocalStack integration suite"
 	@echo "  fmt             Format code (cargo fmt + goneat format)"
 	@echo "  lint            Run linting (cargo clippy + goneat lint)"
 	@echo "  precommit       Pre-commit checks (fast: fmt, clippy)"
@@ -243,6 +244,13 @@ test: ## Run test suite
 	@echo "Running tests..."
 	$(CARGO) test --workspace
 	@echo "[ok] Tests passed"
+
+test-integration-s3: ## Run S3 LocalStack integration tests
+	@echo "Running S3 integration tests against LocalStack..."
+	AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+	AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
+	$(CARGO) test -p storageprims-s3 --features integration --test integration_s3 -- --nocapture
+	@echo "[ok] S3 integration tests passed"
 
 fmt: ## Format code (cargo fmt + goneat format)
 	@echo "Formatting Rust..."
