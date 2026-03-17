@@ -32,12 +32,14 @@ BIN_DIR := $(CURDIR)/bin
 SFETCH_VERSION := latest
 GONEAT_VERSION ?= v0.5.1
 GONEAT_FORMAT_FAIL_ON ?= medium
+NEXTEST_VERSION ?= 0.9.128
 
 # Tool paths
 # sfetch: repo-local (trust anchor) or PATH
 # goneat: user-space PATH only (like prettier, biome, ruff)
 SFETCH = $(shell [ -x "$(BIN_DIR)/sfetch" ] && echo "$(BIN_DIR)/sfetch" || command -v sfetch 2>/dev/null)
 GONEAT = $(shell command -v goneat 2>/dev/null)
+CARGO_NEXTEST = $(shell command -v cargo-nextest 2>/dev/null)
 
 # Rust toolchain (assumed installed - rustup is developer responsibility)
 CARGO = cargo
@@ -72,7 +74,7 @@ help: ## Show available targets
 	@echo "Quality gates:"
 	@echo "  check           Run all quality checks (fmt, lint, test, deny)"
 	@echo "  test            Run test suite"
-	@echo "  test-integration-s3  Run S3 LocalStack integration suite"
+	@echo "  test-integration-s3  Run S3 LocalStack integration suite (cargo nextest)"
 	@echo "  fmt             Format code (cargo fmt + goneat format)"
 	@echo "  lint            Run linting (cargo clippy + goneat lint)"
 	@echo "  precommit       Pre-commit checks (fast: fmt, clippy)"
@@ -151,7 +153,7 @@ bootstrap: ## Install required tools (sfetch -> goneat)
 		echo "[!!] goneat installation failed"; exit 1; \
 	fi
 	@echo ""
-	@# Step 3: Install Rust tools via cargo (cargo-deny, cargo-audit, cargo-edit)
+	@# Step 3: Install Rust tools via cargo (cargo-deny, cargo-audit, cargo-edit, cargo-nextest)
 	@echo "[..] Checking Rust dev tools..."
 	@if ! command -v cargo-deny >/dev/null 2>&1; then \
 		echo "[..] Installing cargo-deny..."; \
@@ -170,6 +172,12 @@ bootstrap: ## Install required tools (sfetch -> goneat)
 		cargo install cargo-edit --locked; \
 	else \
 		echo "[ok] cargo-edit installed"; \
+	fi
+	@if ! cargo nextest --version >/dev/null 2>&1; then \
+		echo "[..] Installing cargo-nextest $(NEXTEST_VERSION)..."; \
+		cargo install cargo-nextest --locked --version $(NEXTEST_VERSION); \
+	else \
+		echo "[ok] cargo-nextest installed"; \
 	fi
 	@echo ""
 	@echo "[ok] Bootstrap complete"
@@ -217,6 +225,12 @@ tools: ## Verify external tools are available
 	else \
 		echo "[!!] cargo-edit not found (cargo install cargo-edit)"; \
 	fi
+	@# Check cargo-nextest
+	@if cargo nextest --version >/dev/null 2>&1; then \
+		echo "[ok] cargo-nextest: $$(cargo nextest --version)"; \
+	else \
+		echo "[!!] cargo-nextest not found (cargo install cargo-nextest --locked --version $(NEXTEST_VERSION))"; \
+	fi
 	@# Check sfetch
 	@if [ -x "$(BIN_DIR)/sfetch" ]; then \
 		echo "[ok] sfetch: $(BIN_DIR)/sfetch"; \
@@ -247,9 +261,13 @@ test: ## Run test suite
 
 test-integration-s3: ## Run S3 LocalStack integration tests
 	@echo "Running S3 integration tests against LocalStack..."
+	@if ! cargo nextest --version >/dev/null 2>&1; then \
+		echo "[!!] cargo-nextest not found (run 'make bootstrap' or 'cargo install cargo-nextest --locked --version $(NEXTEST_VERSION)')"; \
+		exit 1; \
+	fi
 	AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
 	AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
-	$(CARGO) test -p storageprims-s3 --features integration --test integration_s3 -- --nocapture
+	$(CARGO) nextest run -p storageprims-s3 --features integration --test integration_s3
 	@echo "[ok] S3 integration tests passed"
 
 fmt: ## Format code (cargo fmt + goneat format)

@@ -46,6 +46,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.128
       - name: Start LocalStack
         run: docker compose -f docker-compose.localstack.yml up -d localstack
       - name: Wait for LocalStack
@@ -66,7 +69,7 @@ jobs:
           AWS_REGION: us-east-1
           AWS_REQUEST_CHECKSUM_CALCULATION: when_required
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-        run: cargo test -p storageprims-s3 --features integration --test integration_s3 -- --nocapture
+        run: cargo nextest run -p storageprims-s3 --features integration --test integration_s3
       - name: Stop LocalStack
         if: always()
         run: docker compose -f docker-compose.localstack.yml down -v

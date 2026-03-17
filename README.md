@@ -108,11 +108,14 @@ storageprims-ffi           C-ABI exports + runtime management
 ## Development
 
 ```bash
-make bootstrap    # Install tools (sfetch -> goneat, cargo-deny, cargo-audit)
+make bootstrap    # Install tools (sfetch -> goneat, cargo-deny, cargo-audit, cargo-nextest)
 make check        # Run all quality checks (fmt, lint, test, deny)
 make build        # Build all crates
 make test         # Run tests
+make test-integration-s3  # Run provider integration via cargo nextest
 ```
+
+Provider follow-on work should use the reusable hardening checklist in [docs/provider-hardening-checklist.md](docs/provider-hardening-checklist.md).
 
 ## Quality Gates
 
