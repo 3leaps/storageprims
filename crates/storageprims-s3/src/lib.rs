@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -38,8 +37,8 @@ struct S3Location {
 
 struct AsyncReadBody {
     reader: Mutex<BoxedByteStream>,
-    finished: AtomicBool,
-    remaining: Mutex<u64>,
+    finished: bool,
+    remaining: u64,
 }
 
 impl S3Provider {
@@ -635,6 +634,11 @@ where
 
     match error {
         SdkError::ServiceError(context) => {
+            let retry_after = context
+                .raw()
+                .headers()
+                .get("retry-after")
+                .and_then(parse_retry_after_value);
             let err = context.into_err();
             let code = err.code().unwrap_or_default();
             match code {
@@ -663,7 +667,7 @@ where
                 "SlowDown" | "Throttling" | "TooManyRequestsException" => StorageError::Throttled {
                     provider,
                     operation,
-                    retry_after: None,
+                    retry_after,
                 },
                 "PreconditionFailed" | "ConditionalRequestConflict" => StorageError::Conflict {
                     provider,
@@ -731,13 +735,17 @@ where
 fn parse_retry_after(message: &str) -> Option<Duration> {
     let marker = "retry-after:";
     let lower = message.to_ascii_lowercase();
-    lower.find(marker).and_then(|offset| {
-        lower[offset + marker.len()..]
-            .split(|c: char| !c.is_ascii_digit())
-            .find(|part| !part.is_empty())
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(Duration::from_secs)
-    })
+    lower
+        .find(marker)
+        .and_then(|offset| parse_retry_after_value(&lower[offset + marker.len()..]))
+}
+
+fn parse_retry_after_value(value: &str) -> Option<Duration> {
+    value
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|part| !part.is_empty())
+        .and_then(|seconds| seconds.parse::<u64>().ok())
+        .map(Duration::from_secs)
 }
 
 fn normalize_prefix(prefix: Option<String>) -> Option<String> {
@@ -759,8 +767,8 @@ impl AsyncReadBody {
     fn new(reader: BoxedByteStream, content_length: u64) -> Self {
         Self {
             reader: Mutex::new(reader),
-            finished: AtomicBool::new(false),
-            remaining: Mutex::new(content_length),
+            finished: false,
+            remaining: content_length,
         }
     }
 }
@@ -773,20 +781,39 @@ impl http_body::Body for AsyncReadBody {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<std::result::Result<Frame<Self::Data>, Self::Error>>> {
-        if self.finished.load(Ordering::Acquire) {
+        let this = self.get_mut();
+
+        if this.finished {
             return Poll::Ready(None);
         }
 
-        let mut reader = self.reader.lock().expect("async read body mutex poisoned");
-        let mut remaining = self
-            .remaining
-            .lock()
-            .expect("async read body mutex poisoned");
-        let read_limit = if *remaining == 0 {
-            1
-        } else {
-            (*remaining).min(8 * 1024) as usize
-        };
+        let mut reader = this.reader.lock().expect("async read body mutex poisoned");
+
+        if this.remaining == 0 {
+            let mut probe = [0_u8; 1];
+            let mut read_buf = ReadBuf::new(&mut probe);
+
+            return match Pin::new(&mut *reader).poll_read(cx, &mut read_buf) {
+                Poll::Ready(Ok(())) => {
+                    this.finished = true;
+                    if read_buf.filled().is_empty() {
+                        Poll::Ready(None)
+                    } else {
+                        Poll::Ready(Some(Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "stream exceeded declared content length",
+                        ))))
+                    }
+                }
+                Poll::Ready(Err(error)) => {
+                    this.finished = true;
+                    Poll::Ready(Some(Err(error)))
+                }
+                Poll::Pending => Poll::Pending,
+            };
+        }
+
+        let read_limit = this.remaining.min(8 * 1024) as usize;
         let mut buffer = vec![0_u8; read_limit];
         let mut read_buf = ReadBuf::new(&mut buffer);
 
@@ -794,32 +821,21 @@ impl http_body::Body for AsyncReadBody {
             Poll::Ready(Ok(())) => {
                 let filled = read_buf.filled();
                 if filled.is_empty() {
-                    self.finished.store(true, Ordering::Release);
-                    if *remaining == 0 {
-                        return Poll::Ready(None);
-                    }
+                    this.finished = true;
                     return Poll::Ready(Some(Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
                         format!(
                             "stream ended before declared content length; {} bytes remaining",
-                            *remaining
+                            this.remaining
                         ),
                     ))));
                 }
 
-                if *remaining == 0 {
-                    self.finished.store(true, Ordering::Release);
-                    return Poll::Ready(Some(Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "stream exceeded declared content length",
-                    ))));
-                }
-
-                *remaining -= filled.len() as u64;
+                this.remaining -= filled.len() as u64;
                 Poll::Ready(Some(Ok(Frame::data(Bytes::copy_from_slice(filled)))))
             }
             Poll::Ready(Err(error)) => {
-                self.finished.store(true, Ordering::Release);
+                this.finished = true;
                 Poll::Ready(Some(Err(error)))
             }
             Poll::Pending => Poll::Pending,
@@ -827,23 +843,28 @@ impl http_body::Body for AsyncReadBody {
     }
 
     fn is_end_stream(&self) -> bool {
-        self.finished.load(Ordering::Acquire)
+        self.finished
     }
 
     fn size_hint(&self) -> SizeHint {
-        let remaining = *self
-            .remaining
-            .lock()
-            .expect("async read body mutex poisoned");
-        SizeHint::with_exact(remaining)
+        SizeHint::with_exact(self.remaining)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_s3::operation::{get_object::GetObjectError, head_object::HeadObjectError};
+    use aws_smithy_runtime_api::http::{Response, StatusCode};
+    use aws_smithy_types::body::SdkBody;
+    use aws_smithy_types::error::ErrorMetadata;
     use std::error::Error;
     use std::io::{Cursor, ErrorKind};
+    use std::sync::{Mutex as StdMutex, MutexGuard, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use aws_credential_types::provider::ProvideCredentials;
+    use storageprims_core::TargetConfig;
 
     #[test]
     fn join_key_respects_root_prefix() {
@@ -950,5 +971,366 @@ mod tests {
             .downcast_ref::<std::io::Error>()
             .expect("source should be an io error");
         assert_eq!(io_error.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn map_sdk_error_treats_no_such_bucket_as_container_not_found() {
+        let error = map_sdk_error(
+            ProviderKind::S3,
+            StorageOperation::Head,
+            Some("missing.txt"),
+            Some("missing-bucket"),
+            aws_sdk_s3::error::SdkError::service_error(
+                HeadObjectError::generic(ErrorMetadata::builder().code("NoSuchBucket").build()),
+                Response::new(
+                    StatusCode::try_from(404).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+
+        assert!(matches!(
+            error,
+            StorageError::ContainerNotFound {
+                provider: ProviderKind::S3,
+                operation: StorageOperation::Head,
+                container,
+            } if container == "missing-bucket"
+        ));
+    }
+
+    #[test]
+    fn map_sdk_error_treats_invalid_request_as_invalid_argument() {
+        let error = map_sdk_error(
+            ProviderKind::S3,
+            StorageOperation::GetRange,
+            Some("ranges/data.bin"),
+            Some("bucket"),
+            aws_sdk_s3::error::SdkError::service_error(
+                GetObjectError::generic(ErrorMetadata::builder().code("InvalidRequest").build()),
+                Response::new(
+                    StatusCode::try_from(416).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+
+        assert!(matches!(
+            error,
+            StorageError::InvalidArgument {
+                operation: Some(StorageOperation::GetRange),
+                argument,
+                reason,
+            } if argument == "ranges/data.bin" && reason == "InvalidRequest"
+        ));
+    }
+
+    #[test]
+    fn map_sdk_error_extracts_retry_after_from_structured_throttle_response() {
+        let mut response = Response::new(
+            StatusCode::try_from(503).expect("valid status"),
+            SdkBody::empty(),
+        );
+        response.headers_mut().insert("retry-after", "17");
+
+        let error = map_sdk_error(
+            ProviderKind::S3,
+            StorageOperation::List,
+            Some("fixtures/"),
+            Some("bucket"),
+            aws_sdk_s3::error::SdkError::service_error(
+                HeadObjectError::generic(ErrorMetadata::builder().code("SlowDown").build()),
+                response,
+            ),
+        );
+
+        assert!(matches!(
+            error,
+            StorageError::Throttled {
+                provider: ProviderKind::S3,
+                operation: StorageOperation::List,
+                retry_after: Some(duration),
+            } if duration == Duration::from_secs(17)
+        ));
+    }
+
+    #[tokio::test]
+    async fn env_credential_source_uses_only_configured_env_vars() {
+        let mut env_guard = AwsTestEnv::acquire();
+        env_guard.clear_standard_aws_env();
+        env_guard.set("AWS_ACCESS_KEY_ID", "env-akid");
+        env_guard.set("AWS_SECRET_ACCESS_KEY", "env-secret");
+        env_guard.set("AWS_SESSION_TOKEN", "env-token");
+        env_guard.write_profile_files(
+            "ignored",
+            "[ignored]\naws_access_key_id = profile-akid\naws_secret_access_key = profile-secret\n",
+            "[profile ignored]\nregion = us-west-2\n",
+        );
+
+        let credentials = resolved_credentials(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                region: Some("us-east-1".to_string()),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::Env {
+                variables: vec![
+                    "AWS_ACCESS_KEY_ID".to_string(),
+                    "AWS_SECRET_ACCESS_KEY".to_string(),
+                    "AWS_SESSION_TOKEN".to_string(),
+                ],
+            },
+        })
+        .await;
+
+        assert_eq!(credentials.access_key_id(), "env-akid");
+        assert_eq!(credentials.secret_access_key(), "env-secret");
+        assert_eq!(credentials.session_token(), Some("env-token"));
+    }
+
+    #[tokio::test]
+    async fn profile_credential_source_uses_named_profile_in_isolation() {
+        let mut env_guard = AwsTestEnv::acquire();
+        env_guard.clear_standard_aws_env();
+        env_guard.write_profile_files(
+            "isolated",
+            "[isolated]\naws_access_key_id = profile-akid\naws_secret_access_key = profile-secret\naws_session_token = profile-token\n",
+            "[profile isolated]\nregion = us-west-2\n",
+        );
+
+        let credentials = resolved_credentials(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                region: Some("us-east-1".to_string()),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::Profile {
+                name: "isolated".to_string(),
+            },
+        })
+        .await;
+
+        assert_eq!(credentials.access_key_id(), "profile-akid");
+        assert_eq!(credentials.secret_access_key(), "profile-secret");
+        assert_eq!(credentials.session_token(), Some("profile-token"));
+    }
+
+    #[tokio::test]
+    async fn default_chain_prefers_env_over_profile_when_both_are_present() {
+        let mut env_guard = AwsTestEnv::acquire();
+        env_guard.clear_standard_aws_env();
+        env_guard.set("AWS_ACCESS_KEY_ID", "env-akid");
+        env_guard.set("AWS_SECRET_ACCESS_KEY", "env-secret");
+        env_guard.set("AWS_PROFILE", "chainprofile");
+        env_guard.write_profile_files(
+            "chainprofile",
+            "[chainprofile]\naws_access_key_id = profile-akid\naws_secret_access_key = profile-secret\n",
+            "[profile chainprofile]\nregion = us-west-2\n",
+        );
+
+        let credentials = resolved_credentials(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                region: Some("us-east-1".to_string()),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::DefaultChain,
+        })
+        .await;
+
+        assert_eq!(credentials.access_key_id(), "env-akid");
+        assert_eq!(credentials.secret_access_key(), "env-secret");
+    }
+
+    #[tokio::test]
+    async fn default_chain_falls_back_to_profile_when_env_is_absent() {
+        let mut env_guard = AwsTestEnv::acquire();
+        env_guard.clear_standard_aws_env();
+        env_guard.set("AWS_PROFILE", "chainprofile");
+        env_guard.write_profile_files(
+            "chainprofile",
+            "[chainprofile]\naws_access_key_id = profile-akid\naws_secret_access_key = profile-secret\n",
+            "[profile chainprofile]\nregion = us-west-2\n",
+        );
+
+        let credentials = resolved_credentials(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                region: Some("us-east-1".to_string()),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::DefaultChain,
+        })
+        .await;
+
+        assert_eq!(credentials.access_key_id(), "profile-akid");
+        assert_eq!(credentials.secret_access_key(), "profile-secret");
+    }
+
+    #[test]
+    fn inline_static_configuration_errors_do_not_echo_secret_values() {
+        let mut values = BTreeMap::new();
+        values.insert(
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            "super-secret-value".to_string(),
+        );
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+        let message = runtime.block_on(async {
+            load_sdk_config(&ProviderConfig {
+                provider: ProviderKind::S3,
+                target: TargetConfig::default(),
+                credentials: CredentialSource::InlineStatic { values },
+            })
+            .await
+            .expect_err("missing access key should fail")
+            .to_string()
+        });
+
+        assert!(!message.contains("super-secret-value"));
+    }
+
+    #[test]
+    fn env_configuration_errors_do_not_echo_secret_values() {
+        let mut env_guard = AwsTestEnv::acquire();
+        env_guard.clear_standard_aws_env();
+        env_guard.set("AWS_SECRET_ACCESS_KEY", "super-secret-value");
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+        let message = runtime.block_on(async {
+            load_sdk_config(&ProviderConfig {
+                provider: ProviderKind::S3,
+                target: TargetConfig::default(),
+                credentials: CredentialSource::Env {
+                    variables: vec![
+                        "AWS_SECRET_ACCESS_KEY".to_string(),
+                        "AWS_ACCESS_KEY_ID".to_string(),
+                    ],
+                },
+            })
+            .await
+            .expect_err("missing access key should fail")
+            .to_string()
+        });
+
+        assert!(!message.contains("super-secret-value"));
+    }
+
+    async fn resolved_credentials(config: ProviderConfig) -> Credentials {
+        let sdk_config = load_sdk_config(&config)
+            .await
+            .expect("sdk config should load");
+        let provider = sdk_config
+            .credentials_provider()
+            .expect("credentials provider should be configured");
+        provider
+            .provide_credentials()
+            .await
+            .expect("credentials should resolve")
+    }
+
+    fn aws_env_lock() -> &'static StdMutex<()> {
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(()))
+    }
+
+    struct AwsTestEnv {
+        _guard: MutexGuard<'static, ()>,
+        saved: Vec<(String, Option<String>)>,
+        temp_dir: std::path::PathBuf,
+    }
+
+    impl AwsTestEnv {
+        fn acquire() -> Self {
+            let guard = aws_env_lock()
+                .lock()
+                .expect("aws env lock should not poison");
+            let temp_dir = std::env::temp_dir().join(format!(
+                "storageprims-s3-test-{}-{}",
+                std::process::id(),
+                unique_suffix()
+            ));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+
+            let mut env = Self {
+                _guard: guard,
+                saved: Vec::new(),
+                temp_dir,
+            };
+            env.set("AWS_EC2_METADATA_DISABLED", "true");
+            env
+        }
+
+        fn clear_standard_aws_env(&mut self) {
+            for key in [
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "AWS_PROFILE",
+                "AWS_CONFIG_FILE",
+                "AWS_SHARED_CREDENTIALS_FILE",
+                "AWS_DEFAULT_REGION",
+                "AWS_REGION",
+            ] {
+                self.remove(key);
+            }
+        }
+
+        fn set(&mut self, key: &str, value: &str) {
+            self.capture(key);
+            std::env::set_var(key, value);
+        }
+
+        fn remove(&mut self, key: &str) {
+            self.capture(key);
+            std::env::remove_var(key);
+        }
+
+        fn write_profile_files(&mut self, profile: &str, credentials: &str, config: &str) {
+            let credentials_path = self.temp_dir.join("credentials");
+            let config_path = self.temp_dir.join("config");
+            std::fs::write(&credentials_path, credentials).expect("credentials file should write");
+            std::fs::write(&config_path, config).expect("config file should write");
+
+            self.set(
+                "AWS_SHARED_CREDENTIALS_FILE",
+                credentials_path.to_str().expect("utf-8 temp path"),
+            );
+            self.set(
+                "AWS_CONFIG_FILE",
+                config_path.to_str().expect("utf-8 temp path"),
+            );
+            self.set("AWS_PROFILE", profile);
+        }
+
+        fn capture(&mut self, key: &str) {
+            if self.saved.iter().any(|(saved_key, _)| saved_key == key) {
+                return;
+            }
+            self.saved.push((key.to_string(), std::env::var(key).ok()));
+        }
+    }
+
+    impl Drop for AwsTestEnv {
+        fn drop(&mut self) {
+            for (key, value) in self.saved.iter().rev() {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.temp_dir);
+        }
+    }
+
+    fn unique_suffix() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough for tests")
+            .as_nanos()
     }
 }

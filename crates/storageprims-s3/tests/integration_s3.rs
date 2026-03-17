@@ -2,13 +2,14 @@
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use storageprims_core::{
     BoxedByteStream, CopyRequest, CredentialSource, GetRangeRequest, ProviderConfig, ProviderKind,
-    PutOptions, StorageProvider, TargetConfig,
+    PutOptions, StorageError, StorageProvider, TargetConfig,
 };
 use storageprims_s3::S3Provider;
 use tokio::io::AsyncReadExt;
@@ -111,6 +112,140 @@ async fn s3_provider_round_trips_against_localstack() {
 }
 
 #[tokio::test]
+async fn s3_provider_paginates_list_results_against_localstack() {
+    let test_context = TestContext::new().await;
+    let provider = test_context.provider().await;
+
+    for key in ["fixtures/a.txt", "fixtures/b.txt", "fixtures/c.txt"] {
+        provider
+            .put(
+                key,
+                boxed_reader(key),
+                PutOptions {
+                    content_length: Some(key.len() as u64),
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect("seed object for pagination");
+    }
+
+    let first_page = provider
+        .list(storageprims_core::ListOptions {
+            prefix: Some("fixtures/".to_string()),
+            continuation_token: None,
+            max_keys: Some(2),
+        })
+        .await
+        .expect("first page succeeds");
+    assert_eq!(first_page.objects.len(), 2);
+    assert!(first_page.is_truncated);
+    assert!(first_page.continuation_token.is_some());
+
+    let second_page = provider
+        .list(storageprims_core::ListOptions {
+            prefix: Some("fixtures/".to_string()),
+            continuation_token: first_page.continuation_token.clone(),
+            max_keys: Some(2),
+        })
+        .await
+        .expect("second page succeeds");
+    assert_eq!(second_page.objects.len(), 1);
+    assert!(!second_page.is_truncated);
+    assert!(second_page.continuation_token.is_none());
+
+    let first_paths = first_page
+        .objects
+        .iter()
+        .map(|object| object.path.as_str())
+        .collect::<Vec<_>>();
+    let second_paths = second_page
+        .objects
+        .iter()
+        .map(|object| object.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(first_paths, vec!["fixtures/a.txt", "fixtures/b.txt"]);
+    assert_eq!(second_paths, vec!["fixtures/c.txt"]);
+}
+
+#[tokio::test]
+async fn s3_provider_exercises_range_boundaries_against_localstack() {
+    let test_context = TestContext::new().await;
+    let provider = test_context.provider().await;
+
+    provider
+        .put(
+            "ranges/data.bin",
+            boxed_reader("abcdef"),
+            PutOptions {
+                content_length: Some(6),
+                ..PutOptions::default()
+            },
+        )
+        .await
+        .expect("seed range object");
+
+    let first_byte = provider
+        .get_range(GetRangeRequest {
+            key: "ranges/data.bin".to_string(),
+            offset: 0,
+            length: 1,
+        })
+        .await
+        .expect("first byte range succeeds");
+    assert_eq!(read_stream(first_byte).await, b"a");
+
+    let final_byte = provider
+        .get_range(GetRangeRequest {
+            key: "ranges/data.bin".to_string(),
+            offset: 5,
+            length: 1,
+        })
+        .await
+        .expect("final byte range succeeds");
+    assert_eq!(read_stream(final_byte).await, b"f");
+
+    let whole_object = provider
+        .get_range(GetRangeRequest {
+            key: "ranges/data.bin".to_string(),
+            offset: 0,
+            length: 6,
+        })
+        .await
+        .expect("full-object range succeeds");
+    assert_eq!(read_stream(whole_object).await, b"abcdef");
+
+    let zero_length = match provider
+        .get_range(GetRangeRequest {
+            key: "ranges/data.bin".to_string(),
+            offset: 0,
+            length: 0,
+        })
+        .await
+    {
+        Ok(_) => panic!("zero-length range should fail"),
+        Err(error) => error,
+    };
+    assert!(matches!(zero_length, StorageError::InvalidArgument { .. }));
+
+    let out_of_range = match provider
+        .get_range(GetRangeRequest {
+            key: "ranges/data.bin".to_string(),
+            offset: 9,
+            length: 1,
+        })
+        .await
+    {
+        Ok(_) => panic!("out-of-range request should fail"),
+        Err(error) => error,
+    };
+    assert!(
+        !matches!(out_of_range, StorageError::ProviderUnavailable { .. }),
+        "out-of-range request should fail as a service error, not transport failure: {out_of_range:?}"
+    );
+}
+
+#[tokio::test]
 async fn s3_provider_relay_copy_across_buckets() {
     let source_context = TestContext::new().await;
     let destination_context = TestContext::new().await;
@@ -147,6 +282,67 @@ async fn s3_provider_relay_copy_across_buckets() {
         .expect("destination object exists");
     let copied_body = read_stream(copied).await;
     assert_eq!(copied_body, b"relay-payload");
+}
+
+#[tokio::test]
+async fn s3_provider_surfaces_missing_key_and_bucket_failures() {
+    let test_context = TestContext::new().await;
+    let provider = test_context.provider().await;
+
+    let missing_key = provider
+        .head("missing.txt")
+        .await
+        .expect_err("missing key should fail");
+    assert!(matches!(missing_key, StorageError::NotFound { .. }));
+
+    let missing_bucket_provider = S3Provider::from_config(ProviderConfig {
+        provider: ProviderKind::S3,
+        target: TargetConfig {
+            container: Some(format!("missing-{}", unique_suffix())),
+            region: Some(TEST_REGION.to_string()),
+            endpoint: Some(test_context.endpoint.clone()),
+            force_path_style: Some(true),
+            ..TargetConfig::default()
+        },
+        credentials: CredentialSource::InlineStatic {
+            values: credentials_map(),
+        },
+    })
+    .await
+    .expect("missing bucket provider config should be valid");
+    let missing_bucket = missing_bucket_provider
+        .head("whatever.txt")
+        .await
+        .expect_err("missing bucket should fail");
+    assert!(
+        !matches!(missing_bucket, StorageError::ProviderUnavailable { .. }),
+        "missing bucket should fail as a service error, not transport failure: {missing_bucket:?}"
+    );
+}
+
+#[tokio::test]
+async fn s3_provider_surfaces_provider_unavailable_for_unreachable_endpoint() {
+    let provider = S3Provider::from_config(ProviderConfig {
+        provider: ProviderKind::S3,
+        target: TargetConfig {
+            container: Some("bucket".to_string()),
+            region: Some(TEST_REGION.to_string()),
+            endpoint: Some("http://127.0.0.1:9".to_string()),
+            force_path_style: Some(true),
+            ..TargetConfig::default()
+        },
+        credentials: CredentialSource::InlineStatic {
+            values: credentials_map(),
+        },
+    })
+    .await
+    .expect("provider config should be valid");
+
+    let error = provider
+        .head("anything.txt")
+        .await
+        .expect_err("unreachable endpoint should fail");
+    assert!(matches!(error, StorageError::ProviderUnavailable { .. }));
 }
 
 struct TestContext {
@@ -224,8 +420,13 @@ async fn read_stream(mut stream: BoxedByteStream) -> Vec<u8> {
 }
 
 fn unique_suffix() -> u128 {
-    SystemTime::now()
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic enough for tests")
-        .as_nanos()
+        .as_nanos();
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed) as u128;
+
+    (timestamp << 16) ^ counter ^ (std::process::id() as u128)
 }

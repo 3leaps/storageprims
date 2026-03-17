@@ -1836,6 +1836,8 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "aws-sdk-s3",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
  "bytes",
  "http-body 1.0.1",
  "percent-encoding",
