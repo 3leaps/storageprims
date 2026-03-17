@@ -40,7 +40,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace
+  integration-s3:
+    name: S3 Integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start LocalStack
+        run: docker compose -f docker-compose.localstack.yml up -d localstack
+      - name: Wait for LocalStack
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4566/_localstack/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "LocalStack failed to become healthy"
+          exit 1
+      - name: Run S3 integration tests
+        env:
+          STORAGEPRIMS_S3_TEST_ENDPOINT: http://127.0.0.1:4566
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_REGION: us-east-1
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: cargo test -p storageprims-s3 --features integration --test integration_s3 -- --nocapture
+      - name: Stop LocalStack
+        if: always()
+        run: docker compose -f docker-compose.localstack.yml down -v
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}

@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/storageprims-core",
-    # "crates/storageprims-s3",
+    "crates/storageprims-s3",
     # "crates/storageprims-gcs",
     # "crates/storageprims-azb",
     # "crates/storageprims-local",
@@ -21,6 +21,7 @@ authors = ["3leaps Architecture Council"]
 
 [workspace.dependencies]
 storageprims-core = { path = "crates/storageprims-core" }
+storageprims-s3 = { path = "crates/storageprims-s3" }
 
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
@@ -34,6 +35,13 @@ thiserror = "2.0"
 
 # Bytes
 bytes = "1"
+http-body = "1"
+percent-encoding = "2.3"
+
+# AWS
+aws-config = "=1.8.13"
+aws-credential-types = { version = "=1.2.11", features = ["hardcoded-credentials"] }
+aws-sdk-s3 = { version = "=1.122.0", features = ["behavior-version-latest"] }
 
 # Observability
 tracing = "0.1"

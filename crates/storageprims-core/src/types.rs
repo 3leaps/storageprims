@@ -47,6 +47,7 @@ pub struct GetRangeRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PutOptions {
+    pub content_length: Option<u64>,
     pub content_type: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
