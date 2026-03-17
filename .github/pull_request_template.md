@@ -39,4 +39,4 @@
 
 ## Attribution
 
-Role: <!-- devlead | entarch | devrev | secrev | qa | cicd | deliverylead -->
+Role: <!-- devlead | entarch | devrev | secrev | qa | ffiarch | releng | deliverylead | infoarch -->
