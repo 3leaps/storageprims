@@ -53,7 +53,7 @@ jobs:
         run: docker compose -f docker-compose.localstack.yml up -d localstack
       - name: Wait for LocalStack
         run: |
-          for i in $(seq 1 30); do
+          for _i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:4566/_localstack/health >/dev/null; then
               exit 0
             fi
