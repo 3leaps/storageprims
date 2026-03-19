@@ -1,13 +1,14 @@
 //! Provider configuration and credential-source types.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::ProviderKind;
 
 /// How a provider should resolve credentials.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum CredentialSource {
     DefaultChain,
@@ -16,6 +17,30 @@ pub enum CredentialSource {
     InlineStatic { values: BTreeMap<String, String> },
     Env { variables: Vec<String> },
     InlineEnvMap { values: BTreeMap<String, String> },
+}
+
+impl fmt::Debug for CredentialSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DefaultChain => f.write_str("DefaultChain"),
+            Self::Profile { name } => f.debug_struct("Profile").field("name", name).finish(),
+            Self::CredentialsFile { path } => f
+                .debug_struct("CredentialsFile")
+                .field("path", path)
+                .finish(),
+            Self::InlineStatic { values } => f
+                .debug_struct("InlineStatic")
+                .field("keys", &values.keys().collect::<Vec<_>>())
+                .field("values", &"<redacted>")
+                .finish(),
+            Self::Env { variables } => f.debug_struct("Env").field("variables", variables).finish(),
+            Self::InlineEnvMap { values } => f
+                .debug_struct("InlineEnvMap")
+                .field("keys", &values.keys().collect::<Vec<_>>())
+                .field("values", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 /// Non-secret provider and target configuration.
@@ -32,11 +57,21 @@ pub struct TargetConfig {
 }
 
 /// Canonical provider configuration passed into provider construction.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub provider: ProviderKind,
     pub target: TargetConfig,
     pub credentials: CredentialSource,
+}
+
+impl fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("provider", &self.provider)
+            .field("target", &self.target)
+            .field("credentials", &self.credentials)
+            .finish()
+    }
 }
 
 #[cfg(test)]
@@ -71,5 +106,41 @@ mod tests {
             decoded.credentials,
             CredentialSource::InlineEnvMap { .. }
         ));
+    }
+
+    #[test]
+    fn debug_redacts_inline_credential_values() {
+        let mut values = BTreeMap::new();
+        values.insert("AWS_ACCESS_KEY_ID".to_string(), "AKIASECRET".to_string());
+        values.insert(
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            "super-secret-value".to_string(),
+        );
+
+        let config = ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig::default(),
+            credentials: CredentialSource::InlineStatic { values },
+        };
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("AKIASECRET"));
+        assert!(!debug.contains("super-secret-value"));
+        assert!(debug.contains("AWS_ACCESS_KEY_ID"));
+        assert!(debug.contains("AWS_SECRET_ACCESS_KEY"));
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn debug_redacts_inline_env_map_values() {
+        let mut values = BTreeMap::new();
+        values.insert("ACCESS_TOKEN".to_string(), "very-secret-token".to_string());
+
+        let credentials = CredentialSource::InlineEnvMap { values };
+        let debug = format!("{credentials:?}");
+
+        assert!(!debug.contains("very-secret-token"));
+        assert!(debug.contains("ACCESS_TOKEN"));
+        assert!(debug.contains("<redacted>"));
     }
 }
