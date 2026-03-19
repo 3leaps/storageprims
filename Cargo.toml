@@ -7,7 +7,7 @@ members = [
     # "crates/storageprims-azb",
     # "crates/storageprims-local",
     # "crates/storageprims-cli",
-    # "ffi/storageprims-ffi",
+    "ffi/storageprims-ffi",
     # "bindings/typescript/storageprims/native",
 ]
 
@@ -22,6 +22,7 @@ authors = ["3leaps Architecture Council"]
 [workspace.dependencies]
 storageprims-core = { path = "crates/storageprims-core" }
 storageprims-s3 = { path = "crates/storageprims-s3" }
+storageprims-ffi = { path = "ffi/storageprims-ffi" }
 
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
@@ -36,6 +37,7 @@ thiserror = "2.0"
 # Bytes
 bytes = "1"
 http-body = "1"
+os_pipe = "1.2"
 percent-encoding = "2.3"
 
 # AWS

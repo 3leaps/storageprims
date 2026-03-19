@@ -1,0 +1,84 @@
+//! storageprims-ffi: C-ABI exports for storageprims.
+
+use std::ffi::CString;
+use std::os::raw::c_char;
+
+mod control;
+mod error;
+mod runtime;
+mod stream;
+
+pub use control::{
+    storageprims_copy, storageprims_delete, storageprims_head, storageprims_list,
+    storageprims_provider_create, storageprims_provider_destroy,
+};
+pub use error::{
+    storageprims_clear_error, storageprims_last_error, storageprims_last_error_code,
+    StorageprimsErrorCode,
+};
+pub use stream::{
+    storageprims_get, storageprims_get_finalize, storageprims_get_range, storageprims_put_begin,
+    storageprims_put_finalize,
+};
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const ABI_VERSION: u32 = 1;
+
+#[no_mangle]
+pub extern "C" fn storageprims_version() -> *const c_char {
+    static VERSION_CSTR: std::sync::OnceLock<CString> = std::sync::OnceLock::new();
+    VERSION_CSTR
+        .get_or_init(|| CString::new(VERSION).expect("VERSION should not contain null bytes"))
+        .as_ptr()
+}
+
+#[no_mangle]
+pub extern "C" fn storageprims_abi_version() -> u32 {
+    ABI_VERSION
+}
+
+#[no_mangle]
+pub extern "C" fn storageprims_init() -> u64 {
+    error::clear_error_state();
+    match runtime::init_runtime() {
+        Ok(handle) => handle,
+        Err(error) => {
+            error::set_error(&error);
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn storageprims_shutdown(handle: u64) -> StorageprimsErrorCode {
+    match error::with_error_boundary(|| runtime::shutdown_runtime(handle)) {
+        Ok(()) => StorageprimsErrorCode::Ok,
+        Err(code) => code,
+    }
+}
+
+/// Free a string returned by a storageprims FFI function.
+///
+/// # Safety
+///
+/// `s` must either be null or a pointer previously returned by a storageprims
+/// FFI function that transfers string ownership to the caller.
+#[no_mangle]
+pub unsafe extern "C" fn storageprims_free_string(s: *mut c_char) {
+    if s.is_null() {
+        return;
+    }
+    let _ = CString::from_raw(s);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_and_shutdown_round_trip() {
+        let handle = storageprims_init();
+        assert!(handle > 0);
+        assert_eq!(storageprims_shutdown(handle), StorageprimsErrorCode::Ok);
+    }
+}

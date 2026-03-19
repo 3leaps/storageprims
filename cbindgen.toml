@@ -1,0 +1,32 @@
+language = "C"
+pragma_once = true
+include_version = true
+documentation = true
+cpp_compat = true
+
+[parse]
+parse_deps = false
+
+[export]
+include = [
+  "StorageprimsErrorCode",
+  "storageprims_version",
+  "storageprims_abi_version",
+  "storageprims_free_string",
+  "storageprims_last_error_code",
+  "storageprims_last_error",
+  "storageprims_clear_error",
+  "storageprims_init",
+  "storageprims_shutdown",
+  "storageprims_provider_create",
+  "storageprims_provider_destroy",
+  "storageprims_list",
+  "storageprims_head",
+  "storageprims_delete",
+  "storageprims_copy",
+  "storageprims_get",
+  "storageprims_get_finalize",
+  "storageprims_get_range",
+  "storageprims_put_begin",
+  "storageprims_put_finalize",
+]
