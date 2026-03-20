@@ -5,6 +5,7 @@ use std::os::raw::c_char;
 
 mod control;
 mod error;
+mod ffi_support;
 mod runtime;
 mod stream;
 
@@ -37,16 +38,14 @@ pub extern "C" fn storageprims_abi_version() -> u32 {
     ABI_VERSION
 }
 
+/// Initialize a storageprims FFI runtime and return an opaque handle.
+///
+/// Returns `0` on failure and records the failure detail in the thread-local
+/// last-error slot available through `storageprims_last_error_code` and
+/// `storageprims_last_error`.
 #[no_mangle]
 pub extern "C" fn storageprims_init() -> u64 {
-    error::clear_error_state();
-    match runtime::init_runtime() {
-        Ok(handle) => handle,
-        Err(error) => {
-            error::set_error(&error);
-            0
-        }
-    }
+    error::with_init_boundary(runtime::init_runtime)
 }
 
 #[no_mangle]
