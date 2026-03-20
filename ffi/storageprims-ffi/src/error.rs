@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::os::raw::c_char;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use serde::Serialize;
 use storageprims_core::{StorageError, StorageErrorCode};
@@ -89,11 +90,51 @@ pub(crate) fn set_error(error: &StorageError) -> StorageprimsErrorCode {
     code
 }
 
+fn set_other_error(message: String) -> StorageprimsErrorCode {
+    let payload = ErrorPayload {
+        code: "other".to_string(),
+        message,
+    };
+    let detail_json = serde_json::to_string(&payload).unwrap_or_else(|_| {
+        "{\"code\":\"other\",\"message\":\"failed to serialize error\"}".to_string()
+    });
+
+    LAST_ERROR.with(|state| {
+        let mut state = state.borrow_mut();
+        state.code = StorageprimsErrorCode::Other;
+        state.detail_json = Some(detail_json);
+    });
+
+    StorageprimsErrorCode::Other
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(message) => (*message).to_string(),
+            Err(_) => "panic payload was not a string".to_string(),
+        },
+    }
+}
+
 pub(crate) fn with_error_boundary<T>(
     operation: impl FnOnce() -> storageprims_core::Result<T>,
 ) -> Result<T, StorageprimsErrorCode> {
     clear_error_state();
-    operation().map_err(|error| set_error(&error))
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(result) => result.map_err(|error| set_error(&error)),
+        Err(payload) => Err(set_other_error(format!(
+            "panic caught at storageprims FFI boundary: {}",
+            panic_message(payload)
+        ))),
+    }
+}
+
+pub(crate) fn with_init_boundary(
+    operation: impl FnOnce() -> storageprims_core::Result<u64>,
+) -> u64 {
+    with_error_boundary(operation).unwrap_or_default()
 }
 
 #[no_mangle]
@@ -146,6 +187,20 @@ mod tests {
         let value = unsafe { CStr::from_ptr(detail).to_str().expect("valid utf-8") };
         assert!(value.contains("\"code\":\"notfound\""));
 
+        unsafe { crate::storageprims_free_string(detail) };
+    }
+
+    #[test]
+    fn with_error_boundary_catches_panics() {
+        let result = with_error_boundary::<()>(|| panic!("ffi panic test"));
+
+        assert_eq!(result, Err(StorageprimsErrorCode::Other));
+        assert_eq!(storageprims_last_error_code(), StorageprimsErrorCode::Other);
+
+        let detail = storageprims_last_error();
+        let value = unsafe { CStr::from_ptr(detail).to_str().expect("valid utf-8") };
+        assert!(value.contains("panic caught at storageprims FFI boundary"));
+        assert!(value.contains("ffi panic test"));
         unsafe { crate::storageprims_free_string(detail) };
     }
 }

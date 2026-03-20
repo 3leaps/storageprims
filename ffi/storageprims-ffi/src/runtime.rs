@@ -108,6 +108,14 @@ impl FfiRuntime {
                 reason: format!("unknown stream id {stream_id}"),
             })
     }
+
+    pub(crate) fn remove_stream(&self, stream_id: u64) -> bool {
+        self.streams
+            .lock()
+            .expect("ffi stream registry mutex poisoned")
+            .remove(&stream_id)
+            .is_some()
+    }
 }
 
 static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(1);

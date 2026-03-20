@@ -15,8 +15,8 @@ use storageprims_core::{
 };
 use storageprims_ffi::{
     storageprims_clear_error, storageprims_copy, storageprims_delete, storageprims_free_string,
-    storageprims_get, storageprims_get_finalize, storageprims_head, storageprims_init,
-    storageprims_last_error, storageprims_list, storageprims_provider_create,
+    storageprims_get, storageprims_get_finalize, storageprims_get_range, storageprims_head,
+    storageprims_init, storageprims_last_error, storageprims_list, storageprims_provider_create,
     storageprims_provider_destroy, storageprims_put_begin, storageprims_put_finalize,
     storageprims_shutdown, StorageprimsErrorCode,
 };
@@ -96,6 +96,8 @@ fn ffi_round_trips_control_and_data_plane_against_localstack() {
 
     let body = read_object(handle, provider_id, "fixtures/data.txt");
     assert_eq!(body, b"hello from ffi");
+    let range = read_object_range(handle, provider_id, "fixtures/data.txt", 6, 4);
+    assert_eq!(range, b"from");
 
     let copied: serde_json::Value = call_json_out(|out| {
         let request = serde_json::to_string(&CopyRequest {
@@ -158,14 +160,14 @@ fn ffi_failure_paths_clear_stale_output_values() {
     put_object(handle, provider_id, "fixtures/data.txt", b"hello from ffi");
 
     let invalid_list = CString::new("{").unwrap();
-    let mut list_json = 1_usize as *mut std::os::raw::c_char;
+    let mut list_json = std::ptr::dangling_mut::<std::os::raw::c_char>();
     let code =
         unsafe { storageprims_list(handle, provider_id, invalid_list.as_ptr(), &mut list_json) };
     assert_eq!(code, StorageprimsErrorCode::InvalidArgument);
     assert!(list_json.is_null());
 
     let missing_key = CString::new("fixtures/missing.txt").unwrap();
-    let mut get_json = 1_usize as *mut std::os::raw::c_char;
+    let mut get_json = std::ptr::dangling_mut::<std::os::raw::c_char>();
     let code =
         unsafe { storageprims_get(handle, provider_id, missing_key.as_ptr(), &mut get_json) };
     assert_eq!(code, StorageprimsErrorCode::NotFound);
@@ -173,7 +175,7 @@ fn ffi_failure_paths_clear_stale_output_values() {
 
     let key = CString::new("fixtures/data.txt").unwrap();
     let invalid_metadata = CString::new("{").unwrap();
-    let mut put_json = 1_usize as *mut std::os::raw::c_char;
+    let mut put_json = std::ptr::dangling_mut::<std::os::raw::c_char>();
     let code = unsafe {
         storageprims_put_begin(
             handle,
@@ -299,11 +301,55 @@ fn read_object(handle: u64, provider_id: u64, key: &str) -> Vec<u8> {
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)
         .expect("ffi read should succeed");
-    assert_eq!(
-        storageprims_get_finalize(handle, stream_id),
-        StorageprimsErrorCode::Ok
-    );
+    drop(file);
+    assert_finalize_ok(handle, stream_id);
     buffer
+}
+
+fn read_object_range(
+    handle: u64,
+    provider_id: u64,
+    key: &str,
+    offset: u64,
+    length: u64,
+) -> Vec<u8> {
+    let key = CString::new(key).unwrap();
+    let descriptor: StreamDescriptor = call_json_out(|out| unsafe {
+        storageprims_get_range(handle, provider_id, key.as_ptr(), offset, length, out)
+    });
+    assert_eq!(descriptor.mode, "read");
+    let stream_id = descriptor
+        .stream_id
+        .expect("get_range should return a stream id for finalization");
+
+    let mut file = unsafe { std::fs::File::from_raw_fd(descriptor.fd) };
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)
+        .expect("ffi range read should succeed");
+    drop(file);
+    assert_finalize_ok(handle, stream_id);
+    buffer
+}
+
+fn assert_finalize_ok(handle: u64, stream_id: u64) {
+    let code = storageprims_get_finalize(handle, stream_id);
+    if code != StorageprimsErrorCode::Ok {
+        panic!("get finalize failed with {code:?}: {}", last_error_detail());
+    }
+}
+
+fn last_error_detail() -> String {
+    let detail_ptr = storageprims_last_error();
+    if detail_ptr.is_null() {
+        return "<null last error>".to_string();
+    }
+
+    let detail = unsafe { CStr::from_ptr(detail_ptr) }
+        .to_str()
+        .expect("last error should be valid utf-8")
+        .to_string();
+    unsafe { storageprims_free_string(detail_ptr) };
+    detail
 }
 
 fn call_json_out<T: for<'de> Deserialize<'de>>(

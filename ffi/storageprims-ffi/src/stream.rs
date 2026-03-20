@@ -1,7 +1,5 @@
-use std::ffi::{CStr, CString};
-use std::os::fd::{FromRawFd, IntoRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::os::raw::c_char;
-use std::ptr;
 
 use os_pipe::pipe;
 use serde::Serialize;
@@ -10,6 +8,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 use crate::error::{with_error_boundary, StorageprimsErrorCode};
+use crate::ffi_support::{initialize_out_json, parse_cstr, parse_json, write_json};
 use crate::runtime::{get_runtime, StreamState};
 
 #[derive(Debug, Serialize)]
@@ -19,100 +18,28 @@ struct StreamDescriptor {
     mode: &'static str,
 }
 
-fn parse_cstr(value: *const c_char, field: &str) -> storageprims_core::Result<String> {
-    if value.is_null() {
-        return Err(StorageError::InvalidArgument {
-            operation: None,
-            argument: field.to_string(),
-            reason: "value must not be null".to_string(),
-        });
-    }
-
-    let text = unsafe { CStr::from_ptr(value) }.to_str().map_err(|error| {
-        StorageError::InvalidArgument {
-            operation: None,
-            argument: field.to_string(),
-            reason: format!("value must be valid UTF-8: {error}"),
-        }
-    })?;
-
-    Ok(text.to_string())
-}
-
-fn parse_json<T: serde::de::DeserializeOwned>(
-    value: *const c_char,
-    field: &str,
-) -> storageprims_core::Result<T> {
-    let text = parse_cstr(value, field)?;
-    serde_json::from_str(&text).map_err(|error| StorageError::InvalidArgument {
-        operation: None,
-        argument: field.to_string(),
-        reason: format!("invalid JSON payload: {error}"),
-    })
-}
-
-fn write_json<T: Serialize>(
-    out_json: *mut *mut c_char,
-    value: &T,
-) -> storageprims_core::Result<()> {
-    if out_json.is_null() {
-        return Err(StorageError::InvalidArgument {
-            operation: None,
-            argument: "out_json".to_string(),
-            reason: "output pointer must not be null".to_string(),
-        });
-    }
-
-    let json = serde_json::to_string(value).map_err(|error| StorageError::Other {
-        provider: None,
-        operation: None,
-        detail: format!("failed to serialize JSON result: {error}"),
-        source: None,
-    })?;
-    let c_json = CString::new(json.replace('\0', "?")).map_err(|error| StorageError::Other {
-        provider: None,
-        operation: None,
-        detail: format!("failed to encode JSON result: {error}"),
-        source: None,
-    })?;
-
-    unsafe {
-        *out_json = c_json.into_raw();
-    }
-    Ok(())
-}
-
-fn initialize_out_json(
-    out_json: *mut *mut c_char,
-    field: &str,
-    operation: StorageOperation,
-) -> storageprims_core::Result<()> {
-    if out_json.is_null() {
-        return Err(StorageError::InvalidArgument {
-            operation: Some(operation),
-            argument: field.to_string(),
-            reason: "output pointer must not be null".to_string(),
-        });
-    }
-
-    unsafe {
-        *out_json = ptr::null_mut();
-    }
-    Ok(())
-}
-
 async fn copy_stream_to_pipe(
     mut provider_stream: storageprims_core::BoxedByteStream,
     writer: os_pipe::PipeWriter,
     operation: StorageOperation,
+    expected_bytes: Option<u64>,
 ) -> storageprims_core::Result<()> {
     let writer = unsafe { std::fs::File::from_raw_fd(writer.into_raw_fd()) };
     let mut writer = tokio::fs::File::from_std(writer);
     let mut buffer = [0_u8; 8192];
+    let mut remaining = expected_bytes;
 
     loop {
+        let read_limit = remaining
+            .map(|value| usize::try_from(value.min(buffer.len() as u64)).unwrap_or(buffer.len()))
+            .unwrap_or(buffer.len());
+
+        if read_limit == 0 {
+            return Ok(());
+        }
+
         let read = provider_stream
-            .read(&mut buffer)
+            .read(&mut buffer[..read_limit])
             .await
             .map_err(|error| StorageError::Io {
                 operation: Some(operation),
@@ -120,10 +47,15 @@ async fn copy_stream_to_pipe(
             })?;
 
         if read == 0 {
-            writer.flush().await.map_err(|error| StorageError::Io {
-                operation: Some(operation),
-                source: error,
-            })?;
+            if let Some(remaining) = remaining {
+                return Err(StorageError::Io {
+                    operation: Some(operation),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        format!("stream ended with {remaining} bytes remaining"),
+                    ),
+                });
+            }
             return Ok(());
         }
 
@@ -134,6 +66,13 @@ async fn copy_stream_to_pipe(
                 operation: Some(operation),
                 source: error,
             })?;
+
+        if let Some(remaining_bytes) = remaining.as_mut() {
+            *remaining_bytes = remaining_bytes.saturating_sub(read as u64);
+            if *remaining_bytes == 0 {
+                return Ok(());
+            }
+        }
     }
 }
 
@@ -149,7 +88,9 @@ async fn copy_stream_to_pipe(
 ///
 /// `key` must be a valid, NUL-terminated UTF-8 C string.
 /// `out_stream_json` must be non-null and writable for a `char*` returned by
-/// `storageprims_free_string`.
+/// `storageprims_free_string`. The returned fd is backed by a bounded OS pipe,
+/// so callers should keep draining it; otherwise the provider worker may block
+/// under backpressure until the fd is drained or closed.
 #[no_mangle]
 pub unsafe extern "C" fn storageprims_get(
     handle: u64,
@@ -169,23 +110,28 @@ pub unsafe extern "C" fn storageprims_get(
 
         let provider_stream = runtime.block_on(provider.get(&key))?;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        runtime.spawn(async move {
-            let result = copy_stream_to_pipe(provider_stream, writer, StorageOperation::Get).await;
-            let _ = tx.send(result);
-        });
         let stream_id = runtime.insert_stream(StreamState::PendingRead {
             receiver: rx,
             operation: StorageOperation::Get,
         });
+        let descriptor = StreamDescriptor {
+            stream_id: Some(stream_id),
+            fd: reader.as_raw_fd(),
+            mode: "read",
+        };
 
-        write_json(
-            out_stream_json,
-            &StreamDescriptor {
-                stream_id: Some(stream_id),
-                fd: reader.into_raw_fd(),
-                mode: "read",
-            },
-        )
+        if let Err(error) = write_json(out_stream_json, &descriptor) {
+            let _ = runtime.remove_stream(stream_id);
+            return Err(error);
+        }
+
+        let _ = reader.into_raw_fd();
+        runtime.spawn(async move {
+            let result =
+                copy_stream_to_pipe(provider_stream, writer, StorageOperation::Get, None).await;
+            let _ = tx.send(result);
+        });
+        Ok(())
     }) {
         Ok(()) => StorageprimsErrorCode::Ok,
         Err(code) => code,
@@ -204,7 +150,9 @@ pub unsafe extern "C" fn storageprims_get(
 ///
 /// `key` must be a valid, NUL-terminated UTF-8 C string.
 /// `out_stream_json` must be non-null and writable for a `char*` returned by
-/// `storageprims_free_string`.
+/// `storageprims_free_string`. The returned fd is backed by a bounded OS pipe,
+/// so callers should keep draining it; otherwise the provider worker may block
+/// under backpressure until the fd is drained or closed.
 #[no_mangle]
 pub unsafe extern "C" fn storageprims_get_range(
     handle: u64,
@@ -234,24 +182,33 @@ pub unsafe extern "C" fn storageprims_get_range(
             length,
         }))?;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        runtime.spawn(async move {
-            let result =
-                copy_stream_to_pipe(provider_stream, writer, StorageOperation::GetRange).await;
-            let _ = tx.send(result);
-        });
         let stream_id = runtime.insert_stream(StreamState::PendingRead {
             receiver: rx,
             operation: StorageOperation::GetRange,
         });
+        let descriptor = StreamDescriptor {
+            stream_id: Some(stream_id),
+            fd: reader.as_raw_fd(),
+            mode: "read",
+        };
 
-        write_json(
-            out_stream_json,
-            &StreamDescriptor {
-                stream_id: Some(stream_id),
-                fd: reader.into_raw_fd(),
-                mode: "read",
-            },
-        )
+        if let Err(error) = write_json(out_stream_json, &descriptor) {
+            let _ = runtime.remove_stream(stream_id);
+            return Err(error);
+        }
+
+        let _ = reader.into_raw_fd();
+        runtime.spawn(async move {
+            let result = copy_stream_to_pipe(
+                provider_stream,
+                writer,
+                StorageOperation::GetRange,
+                Some(length),
+            )
+            .await;
+            let _ = tx.send(result);
+        });
+        Ok(())
     }) {
         Ok(()) => StorageprimsErrorCode::Ok,
         Err(code) => code,
@@ -265,7 +222,9 @@ pub unsafe extern "C" fn storageprims_get_range(
 /// `key` must be a valid, NUL-terminated UTF-8 C string.
 /// If non-null, `metadata_json` must be a valid, NUL-terminated UTF-8 JSON string.
 /// `out_stream_json` must be non-null and writable for a `char*` returned by
-/// `storageprims_free_string`.
+/// `storageprims_free_string`. The returned fd is the write end of a bounded
+/// OS pipe, so producer writes may block until the provider worker drains the
+/// pipe or the fd is closed.
 #[no_mangle]
 pub unsafe extern "C" fn storageprims_put_begin(
     handle: u64,
@@ -290,23 +249,26 @@ pub unsafe extern "C" fn storageprims_put_begin(
             source: error,
         })?;
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let stream_id = runtime.insert_stream(StreamState::PendingPut(rx));
+        let descriptor = StreamDescriptor {
+            stream_id: Some(stream_id),
+            fd: writer.as_raw_fd(),
+            mode: "write",
+        };
 
+        if let Err(error) = write_json(out_stream_json, &descriptor) {
+            let _ = runtime.remove_stream(stream_id);
+            return Err(error);
+        }
+
+        let _ = writer.into_raw_fd();
         runtime.spawn(async move {
             let reader = unsafe { std::fs::File::from_raw_fd(reader.into_raw_fd()) };
             let body = Box::new(tokio::fs::File::from_std(reader));
             let result = provider.put(&key, body, options).await;
             let _ = tx.send(result);
         });
-
-        let stream_id = runtime.insert_stream(StreamState::PendingPut(rx));
-        write_json(
-            out_stream_json,
-            &StreamDescriptor {
-                stream_id: Some(stream_id),
-                fd: writer.into_raw_fd(),
-                mode: "write",
-            },
-        )
+        Ok(())
     }) {
         Ok(()) => StorageprimsErrorCode::Ok,
         Err(code) => code,
@@ -438,7 +400,12 @@ mod tests {
             fail_after: 3,
         });
 
-        let result = runtime.block_on(copy_stream_to_pipe(stream, writer, StorageOperation::Get));
+        let result = runtime.block_on(copy_stream_to_pipe(
+            stream,
+            writer,
+            StorageOperation::Get,
+            None,
+        ));
         let mut output = Vec::new();
         let mut reader = unsafe { std::fs::File::from_raw_fd(reader.into_raw_fd()) };
         std::io::Read::read_to_end(&mut reader, &mut output).expect("read pipe output");
@@ -450,6 +417,33 @@ mod tests {
             }) => {}
             other => panic!("expected get I/O error, got {other:?}"),
         }
+        assert_eq!(output, b"abc");
+    }
+
+    #[test]
+    fn copy_stream_to_pipe_stops_after_expected_range_bytes() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+        let (reader, writer) = pipe().expect("pipe should build");
+        let stream: storageprims_core::BoxedByteStream = Box::new(FailingReader {
+            bytes: b"abcdef".to_vec(),
+            cursor: 0,
+            fail_after: 3,
+        });
+
+        let result = runtime.block_on(copy_stream_to_pipe(
+            stream,
+            writer,
+            StorageOperation::GetRange,
+            Some(3),
+        ));
+        let mut output = Vec::new();
+        let mut reader = unsafe { std::fs::File::from_raw_fd(reader.into_raw_fd()) };
+        std::io::Read::read_to_end(&mut reader, &mut output).expect("read pipe output");
+
+        assert!(
+            result.is_ok(),
+            "expected range copy to stop cleanly: {result:?}"
+        );
         assert_eq!(output, b"abc");
     }
 }
