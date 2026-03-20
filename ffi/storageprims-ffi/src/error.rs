@@ -7,8 +7,9 @@ use serde::Serialize;
 use storageprims_core::{StorageError, StorageErrorCode};
 
 #[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StorageprimsErrorCode {
+    #[default]
     Ok = 0,
     InvalidUri = 1,
     InvalidArgument = 2,
@@ -38,12 +39,6 @@ struct ErrorState {
 
 thread_local! {
     static LAST_ERROR: RefCell<ErrorState> = RefCell::new(ErrorState::default());
-}
-
-impl Default for StorageprimsErrorCode {
-    fn default() -> Self {
-        Self::Ok
-    }
 }
 
 impl From<StorageErrorCode> for StorageprimsErrorCode {
