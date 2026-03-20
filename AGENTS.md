@@ -110,6 +110,7 @@ CI covers both platforms via GitHub Actions.
 | License check  | `cargo deny check` |
 | Security audit | `cargo audit`      |
 | Full check     | `make check`       |
+| PR final       | `make pr-final`    |
 
 ## Session Protocol
 
@@ -127,6 +128,12 @@ CI covers both platforms via GitHub Actions.
 - Run `cargo deny check licenses`
 - Verify no unintended changes with `git diff`
 - Use proper commit attribution (see below)
+
+### Before Pushing Or Updating A PR
+
+- Run `make pr-final`
+- Treat `make pr-final` as the required closeout gate for PR creation and PR updates
+- If `make pr-final` changes generated artifacts or formatting, include those changes before pushing
 
 ## Commit Attribution
 

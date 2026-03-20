@@ -1,0 +1,37 @@
+# CI/CD
+
+## PR Closeout
+
+`storageprims` uses `make pr-final` as the canonical local closeout gate before:
+
+- opening a PR
+- pushing follow-up commits to an open PR
+- asking for final merge review
+
+The target is intentionally built from existing repo checks so contributors do not
+have to remember an ad hoc command list.
+
+## `make pr-final`
+
+`make pr-final` currently runs:
+
+- `make fmt`
+- `make cbindgen`
+- `make fmt-check`
+- `make lint`
+- `make test`
+- `make deny`
+- `make test-integration-s3`
+- `make test-integration-ffi`
+
+This sequence is designed to catch the common blind spot where formatting or
+generated headers are stale locally even though narrower Rust-only checks pass.
+
+## Notes
+
+- `test-integration-s3` and `test-integration-ffi` expect LocalStack to be
+  available through `docker compose -f docker-compose.localstack.yml up -d localstack`.
+- `make pr-final` is a local contributor gate. CI still runs its own workflow
+  jobs and remains the source of truth for branch protection.
+- If `make fmt` or `make cbindgen` changes the tree, those changes should be
+  committed before pushing the PR update.

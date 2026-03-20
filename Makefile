@@ -10,9 +10,9 @@
 #   make fmt        - Format code (cargo fmt + goneat format)
 #   make build      - Build all crates
 
-.PHONY: all help bootstrap bootstrap-force tools check test test-integration-s3 fmt fmt-check lint build clean version
+.PHONY: all help bootstrap bootstrap-force tools check test test-integration-s3 test-integration-ffi fmt fmt-check lint build clean version
 .PHONY: precommit prepush deny audit msrv
-.PHONY: build-release build-ffi cbindgen
+.PHONY: build-release build-ffi cbindgen pr-final
 .PHONY: build-local-go build-local-ffi-shared go-test header-go
 .PHONY: version-patch version-minor version-major version-set
 
@@ -75,10 +75,12 @@ help: ## Show available targets
 	@echo "  check           Run all quality checks (fmt, lint, test, deny)"
 	@echo "  test            Run test suite"
 	@echo "  test-integration-s3  Run S3 LocalStack integration suite (cargo nextest)"
+	@echo "  test-integration-ffi Run FFI LocalStack integration suite"
 	@echo "  fmt             Format code (cargo fmt + goneat format)"
 	@echo "  lint            Run linting (cargo clippy + goneat lint)"
 	@echo "  precommit       Pre-commit checks (fast: fmt, clippy)"
 	@echo "  prepush         Pre-push checks (thorough: fmt, clippy, test, deny)"
+	@echo "  pr-final        Final PR gate (fmt, header, checks, and integration lanes)"
 	@echo "  deny            Run cargo-deny license and advisory checks"
 	@echo "  audit           Run cargo-audit security scan"
 	@echo "  msrv            Verify build with MSRV (Rust $(MSRV))"
@@ -270,6 +272,11 @@ test-integration-s3: ## Run S3 LocalStack integration tests
 	$(CARGO) nextest run -p storageprims-s3 --features integration --test integration_s3
 	@echo "[ok] S3 integration tests passed"
 
+test-integration-ffi: ## Run FFI LocalStack integration tests
+	@echo "Running FFI integration tests against LocalStack..."
+	$(CARGO) test -p storageprims-ffi --features integration --test integration_ffi -- --nocapture
+	@echo "[ok] FFI integration tests passed"
+
 fmt: ## Format code (cargo fmt + goneat format)
 	@echo "Formatting Rust..."
 	$(CARGO) fmt --all
@@ -345,6 +352,9 @@ precommit: fmt lint ## Pre-commit checks (fast: fmt, clippy)
 
 prepush: fmt-check lint test deny ## Pre-push checks (thorough)
 	@echo "[ok] Pre-push checks passed"
+
+pr-final: fmt cbindgen fmt-check lint test deny test-integration-s3 test-integration-ffi ## Final PR gate before push/PR update
+	@echo "[ok] PR final checks passed"
 
 # -----------------------------------------------------------------------------
 # Build

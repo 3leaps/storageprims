@@ -56,17 +56,17 @@ Role: devlead (config/agentic/roles/devlead.yaml)
 
 ## Role Selection Guide
 
-| Task                    | Primary Role | May Escalate To                                |
-| ----------------------- | ------------ | ---------------------------------------------- |
-| Provider implementation | devlead      | secrev (credentials), qa (testing)             |
-| Decision records        | entarch      | devlead (implementation validation)            |
-| Code review             | devrev       | secrev (FFI/auth), entarch (decision drift)    |
-| FFI layer / Go bindings | ffiarch      | secrev (memory safety), devlead (impl)         |
-| Security review         | secrev       | human maintainers (critical)                   |
-| Test design             | qa           | devlead (implementation questions)             |
+| Task                    | Primary Role | May Escalate To                                                |
+| ----------------------- | ------------ | -------------------------------------------------------------- |
+| Provider implementation | devlead      | secrev (credentials), qa (testing)                             |
+| Decision records        | entarch      | devlead (implementation validation)                            |
+| Code review             | devrev       | secrev (FFI/auth), entarch (decision drift)                    |
+| FFI layer / Go bindings | ffiarch      | secrev (memory safety), devlead (impl)                         |
+| Security review         | secrev       | human maintainers (critical)                                   |
+| Test design             | qa           | devlead (implementation questions)                             |
 | CI/CD and release       | releng       | deliverylead (gate status), secrev (secrets), human (approval) |
-| Documentation           | infoarch     | entarch (decision content), devlead (accuracy) |
-| Delivery coordination   | deliverylead | entarch (decisions), devlead (timelines)       |
+| Documentation           | infoarch     | entarch (decision content), devlead (accuracy)                 |
+| Delivery coordination   | deliverylead | entarch (decisions), devlead (timelines)                       |
 
 ## Schema
 
