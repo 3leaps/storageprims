@@ -33,6 +33,10 @@ impl std::fmt::Display for ProviderKind {
 pub enum StorageOperation {
     List,
     Head,
+    HeadLines,
+    TailLines,
+    MidLines,
+    CountLines,
     Get,
     GetRange,
     Put,
@@ -47,6 +51,10 @@ impl std::fmt::Display for StorageOperation {
         match self {
             Self::List => write!(f, "list"),
             Self::Head => write!(f, "head"),
+            Self::HeadLines => write!(f, "head_lines"),
+            Self::TailLines => write!(f, "tail_lines"),
+            Self::MidLines => write!(f, "mid_lines"),
+            Self::CountLines => write!(f, "count_lines"),
             Self::Get => write!(f, "get"),
             Self::GetRange => write!(f, "get_range"),
             Self::Put => write!(f, "put"),

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/storageprims-core",
+    "crates/storageprims-ops",
     "crates/storageprims-s3",
     # "crates/storageprims-gcs",
     # "crates/storageprims-azb",
@@ -21,6 +22,7 @@ authors = ["3leaps Architecture Council"]
 
 [workspace.dependencies]
 storageprims-core = { path = "crates/storageprims-core" }
+storageprims-ops = { path = "crates/storageprims-ops" }
 storageprims-s3 = { path = "crates/storageprims-s3" }
 storageprims-ffi = { path = "ffi/storageprims-ffi" }
 

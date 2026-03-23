@@ -4,6 +4,7 @@ use serde::Serialize;
 use storageprims_core::{
     CopyRequest, ListOptions, ObjectMetadata, ProviderConfig, StorageError, StorageOperation,
 };
+use storageprims_ops::{count_lines, head_lines_with_options, mid_lines, tail_lines, LineOptions};
 
 use crate::error::{with_error_boundary, StorageprimsErrorCode};
 use crate::ffi_support::{
@@ -14,6 +15,11 @@ use crate::runtime::{build_provider, get_runtime};
 #[derive(Serialize)]
 struct DeleteResult {
     deleted: bool,
+}
+
+#[derive(Serialize)]
+struct CountLinesResult {
+    count: u64,
 }
 
 /// Create a provider instance from JSON configuration and return an opaque provider id.
@@ -178,6 +184,170 @@ pub unsafe extern "C" fn storageprims_copy(
         let request: CopyRequest = parse_json(request_json, "request_json")?;
         let result = runtime.block_on(provider.copy(request))?;
         write_json(out_result_json, &result)
+    }) {
+        Ok(()) => StorageprimsErrorCode::Ok,
+        Err(code) => code,
+    }
+}
+
+/// Read the first `n` logical lines via the JSON control plane.
+///
+/// # Safety
+///
+/// `key` must be a valid, NUL-terminated UTF-8 C string.
+/// If non-null, `opts_json` must be a valid, NUL-terminated UTF-8 JSON string.
+/// `out_result_json` must be non-null and writable for a `char*` returned by
+/// `storageprims_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn storageprims_head_lines(
+    handle: u64,
+    provider_id: u64,
+    key: *const c_char,
+    n: u64,
+    opts_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> StorageprimsErrorCode {
+    match with_error_boundary(|| {
+        initialize_out_json(
+            out_result_json,
+            "out_result_json",
+            StorageOperation::HeadLines,
+        )?;
+        let runtime = get_runtime(handle)?;
+        let provider = runtime.provider(provider_id)?;
+        let key = parse_cstr(key, "key")?;
+        let options: LineOptions = if opts_json.is_null() {
+            LineOptions::default()
+        } else {
+            parse_json(opts_json, "opts_json")?
+        };
+        let n = usize::try_from(n).map_err(|_| StorageError::InvalidArgument {
+            operation: Some(StorageOperation::HeadLines),
+            argument: "n".to_string(),
+            reason: "line count exceeds supported size".to_string(),
+        })?;
+        let result =
+            runtime.block_on(head_lines_with_options(provider.as_ref(), &key, n, options))?;
+        write_json(out_result_json, &result)
+    }) {
+        Ok(()) => StorageprimsErrorCode::Ok,
+        Err(code) => code,
+    }
+}
+
+/// Read the last `n` logical lines via the JSON control plane.
+///
+/// # Safety
+///
+/// `key` must be a valid, NUL-terminated UTF-8 C string.
+/// If non-null, `opts_json` must be a valid, NUL-terminated UTF-8 JSON string.
+/// `out_result_json` must be non-null and writable for a `char*` returned by
+/// `storageprims_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn storageprims_tail_lines(
+    handle: u64,
+    provider_id: u64,
+    key: *const c_char,
+    n: u64,
+    opts_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> StorageprimsErrorCode {
+    match with_error_boundary(|| {
+        initialize_out_json(
+            out_result_json,
+            "out_result_json",
+            StorageOperation::TailLines,
+        )?;
+        let runtime = get_runtime(handle)?;
+        let provider = runtime.provider(provider_id)?;
+        let key = parse_cstr(key, "key")?;
+        let options: LineOptions = if opts_json.is_null() {
+            LineOptions::default()
+        } else {
+            parse_json(opts_json, "opts_json")?
+        };
+        let n = usize::try_from(n).map_err(|_| StorageError::InvalidArgument {
+            operation: Some(StorageOperation::TailLines),
+            argument: "n".to_string(),
+            reason: "line count exceeds supported size".to_string(),
+        })?;
+        let result = runtime.block_on(tail_lines(provider.as_ref(), &key, n, options))?;
+        write_json(out_result_json, &result)
+    }) {
+        Ok(()) => StorageprimsErrorCode::Ok,
+        Err(code) => code,
+    }
+}
+
+/// Read the first `n` logical lines after midpoint alignment via the JSON control plane.
+///
+/// # Safety
+///
+/// `key` must be a valid, NUL-terminated UTF-8 C string.
+/// If non-null, `opts_json` must be a valid, NUL-terminated UTF-8 JSON string.
+/// `out_result_json` must be non-null and writable for a `char*` returned by
+/// `storageprims_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn storageprims_mid_lines(
+    handle: u64,
+    provider_id: u64,
+    key: *const c_char,
+    n: u64,
+    opts_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> StorageprimsErrorCode {
+    match with_error_boundary(|| {
+        initialize_out_json(
+            out_result_json,
+            "out_result_json",
+            StorageOperation::MidLines,
+        )?;
+        let runtime = get_runtime(handle)?;
+        let provider = runtime.provider(provider_id)?;
+        let key = parse_cstr(key, "key")?;
+        let options: LineOptions = if opts_json.is_null() {
+            LineOptions::default()
+        } else {
+            parse_json(opts_json, "opts_json")?
+        };
+        let n = usize::try_from(n).map_err(|_| StorageError::InvalidArgument {
+            operation: Some(StorageOperation::MidLines),
+            argument: "n".to_string(),
+            reason: "line count exceeds supported size".to_string(),
+        })?;
+        let result = runtime.block_on(mid_lines(provider.as_ref(), &key, n, options))?;
+        write_json(out_result_json, &result)
+    }) {
+        Ok(()) => StorageprimsErrorCode::Ok,
+        Err(code) => code,
+    }
+}
+
+/// Count logical lines via the JSON control plane.
+///
+/// # Safety
+///
+/// `key` must be a valid, NUL-terminated UTF-8 C string.
+/// `out_result_json` must be non-null and writable for a `char*` returned by
+/// `storageprims_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn storageprims_count_lines(
+    handle: u64,
+    provider_id: u64,
+    key: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> StorageprimsErrorCode {
+    match with_error_boundary(|| {
+        initialize_out_json(
+            out_result_json,
+            "out_result_json",
+            StorageOperation::CountLines,
+        )?;
+        let runtime = get_runtime(handle)?;
+        let provider = runtime.provider(provider_id)?;
+        let key = parse_cstr(key, "key")?;
+        let count = runtime.block_on(count_lines(provider.as_ref(), &key))?;
+        write_json(out_result_json, &CountLinesResult { count })
     }) {
         Ok(()) => StorageprimsErrorCode::Ok,
         Err(code) => code,
