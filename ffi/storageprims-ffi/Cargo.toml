@@ -19,6 +19,7 @@ os_pipe.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 storageprims-core.workspace = true
+storageprims-ops.workspace = true
 storageprims-s3.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

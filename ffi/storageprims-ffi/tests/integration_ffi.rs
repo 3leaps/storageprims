@@ -14,12 +14,14 @@ use storageprims_core::{
     TargetConfig,
 };
 use storageprims_ffi::{
-    storageprims_clear_error, storageprims_copy, storageprims_delete, storageprims_free_string,
-    storageprims_get, storageprims_get_finalize, storageprims_get_range, storageprims_head,
-    storageprims_init, storageprims_last_error, storageprims_list, storageprims_provider_create,
+    storageprims_clear_error, storageprims_copy, storageprims_count_lines, storageprims_delete,
+    storageprims_free_string, storageprims_get, storageprims_get_finalize, storageprims_get_range,
+    storageprims_head, storageprims_head_lines, storageprims_init, storageprims_last_error,
+    storageprims_list, storageprims_mid_lines, storageprims_provider_create,
     storageprims_provider_destroy, storageprims_put_begin, storageprims_put_finalize,
-    storageprims_shutdown, StorageprimsErrorCode,
+    storageprims_shutdown, storageprims_tail_lines, StorageprimsErrorCode,
 };
+use storageprims_ops::{LineOptions, LineResult};
 
 const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:4566";
 const TEST_REGION: &str = "us-east-1";
@@ -54,6 +56,11 @@ struct ListResult {
 #[derive(Debug, Deserialize)]
 struct ObjectSummary {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CountLinesResult {
+    count: u64,
 }
 
 fn endpoint() -> String {
@@ -115,6 +122,65 @@ fn ffi_round_trips_control_and_data_plane_against_localstack() {
         unsafe { storageprims_delete(handle, provider_id, key.as_ptr(), out) }
     });
     assert!(deleted.deleted);
+
+    assert_eq!(
+        storageprims_provider_destroy(handle, provider_id),
+        StorageprimsErrorCode::Ok
+    );
+    assert_eq!(storageprims_shutdown(handle), StorageprimsErrorCode::Ok);
+}
+
+#[test]
+fn ffi_line_ops_round_trip_against_localstack() {
+    let endpoint = endpoint();
+    let bucket = format!("storageprims-ffi-it-{}", unique_suffix());
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+    runtime.block_on(create_bucket(&endpoint, &bucket));
+
+    let handle = storageprims_init();
+    assert!(handle > 0);
+
+    let provider_id = create_provider(handle, &bucket, &endpoint);
+    put_object(
+        handle,
+        provider_id,
+        "fixtures/lines.txt",
+        b"aa\nbb\ncc\ndd\nee\n",
+    );
+
+    let head: LineResult = call_json_out(|out| {
+        let key = CString::new("fixtures/lines.txt").unwrap();
+        unsafe {
+            storageprims_head_lines(handle, provider_id, key.as_ptr(), 2, std::ptr::null(), out)
+        }
+    });
+    assert_eq!(head.lines, vec!["aa", "bb"]);
+    assert_eq!(head.byte_offset_start, 0);
+    assert_eq!(head.byte_offset_end, 6);
+
+    let options = CString::new(serde_json::to_string(&LineOptions::default()).unwrap()).unwrap();
+
+    let tail: LineResult = call_json_out(|out| {
+        let key = CString::new("fixtures/lines.txt").unwrap();
+        unsafe {
+            storageprims_tail_lines(handle, provider_id, key.as_ptr(), 2, options.as_ptr(), out)
+        }
+    });
+    assert_eq!(tail.lines, vec!["dd", "ee"]);
+
+    let mid: LineResult = call_json_out(|out| {
+        let key = CString::new("fixtures/lines.txt").unwrap();
+        unsafe {
+            storageprims_mid_lines(handle, provider_id, key.as_ptr(), 2, options.as_ptr(), out)
+        }
+    });
+    assert_eq!(mid.lines, vec!["dd", "ee"]);
+
+    let counted: CountLinesResult = call_json_out(|out| {
+        let key = CString::new("fixtures/lines.txt").unwrap();
+        unsafe { storageprims_count_lines(handle, provider_id, key.as_ptr(), out) }
+    });
+    assert_eq!(counted.count, 5);
 
     assert_eq!(
         storageprims_provider_destroy(handle, provider_id),
