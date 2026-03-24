@@ -120,6 +120,14 @@ pub async fn tail_lines(
     provider: &dyn StorageProvider,
     key: &str,
     n: usize,
+) -> storageprims_core::Result<LineResult> {
+    tail_lines_with_options(provider, key, n, LineOptions::default()).await
+}
+
+pub async fn tail_lines_with_options(
+    provider: &dyn StorageProvider,
+    key: &str,
+    n: usize,
     options: LineOptions,
 ) -> storageprims_core::Result<LineResult> {
     validate_line_count(StorageOperation::TailLines, n)?;
@@ -219,6 +227,14 @@ pub async fn tail_lines(
 }
 
 pub async fn mid_lines(
+    provider: &dyn StorageProvider,
+    key: &str,
+    n: usize,
+) -> storageprims_core::Result<LineResult> {
+    mid_lines_with_options(provider, key, n, LineOptions::default()).await
+}
+
+pub async fn mid_lines_with_options(
     provider: &dyn StorageProvider,
     key: &str,
     n: usize,
@@ -1066,7 +1082,7 @@ mod tests {
     #[tokio::test]
     async fn tail_lines_uses_expanding_ranges() {
         let provider = MockProvider::new("fixtures/data.txt", "a\nb\nc\nd\n");
-        let result = tail_lines(
+        let result = tail_lines_with_options(
             &provider,
             "fixtures/data.txt",
             2,
@@ -1093,7 +1109,7 @@ mod tests {
     #[tokio::test]
     async fn mid_lines_returns_first_lines_after_midpoint_alignment() {
         let provider = MockProvider::new("fixtures/data.txt", "a\nb\nc\nd\ne\n");
-        let result = mid_lines(
+        let result = mid_lines_with_options(
             &provider,
             "fixtures/data.txt",
             2,
@@ -1139,9 +1155,10 @@ mod tests {
     #[tokio::test]
     async fn tail_lines_rejects_compressed_objects_without_force_stream() {
         let provider = MockProvider::new("fixtures/data.txt.gz", "a\nb\n");
-        let error = tail_lines(&provider, "fixtures/data.txt.gz", 1, LineOptions::default())
-            .await
-            .expect_err("compressed tail should fail");
+        let error =
+            tail_lines_with_options(&provider, "fixtures/data.txt.gz", 1, LineOptions::default())
+                .await
+                .expect_err("compressed tail should fail");
 
         assert!(matches!(error, StorageError::Other { .. }));
         assert!(error.to_string().contains("compressed object"));
@@ -1172,7 +1189,7 @@ mod tests {
     #[tokio::test]
     async fn mid_lines_handles_exact_newline_midpoint() {
         let provider = MockProvider::new("fixtures/data.txt", "aa\nbb\ncc\n");
-        let result = mid_lines(
+        let result = mid_lines_with_options(
             &provider,
             "fixtures/data.txt",
             1,
@@ -1234,9 +1251,10 @@ mod tests {
     async fn tail_lines_prefers_compressed_guard_over_binary_probe() {
         let provider =
             MockProvider::with_bytes("fixtures/data.txt.gz", vec![0x1F, 0x8B, 0x08, 0x00, 0x00]);
-        let error = tail_lines(&provider, "fixtures/data.txt.gz", 1, LineOptions::default())
-            .await
-            .expect_err("compressed tail should fail with compressed guard");
+        let error =
+            tail_lines_with_options(&provider, "fixtures/data.txt.gz", 1, LineOptions::default())
+                .await
+                .expect_err("compressed tail should fail with compressed guard");
 
         assert!(error.to_string().contains("compressed object"));
         assert!(!error.to_string().contains("binary content"));
@@ -1246,7 +1264,7 @@ mod tests {
     async fn tail_lines_force_stream_reaches_stream_parser_for_compressed_bytes() {
         let provider =
             MockProvider::with_bytes("fixtures/data.txt.gz", vec![0x1F, 0x8B, 0x08, 0x00, 0x00]);
-        let error = tail_lines(
+        let error = tail_lines_with_options(
             &provider,
             "fixtures/data.txt.gz",
             1,

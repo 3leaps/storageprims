@@ -24,6 +24,7 @@ include = [
   "storageprims_head",
   "storageprims_delete",
   "storageprims_copy",
+  "storageprims_probe",
   "storageprims_head_lines",
   "storageprims_tail_lines",
   "storageprims_mid_lines",

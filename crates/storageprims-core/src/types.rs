@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::{Capability, CredentialSource, ProviderKind};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ListOptions {
     pub prefix: Option<String>,
@@ -80,4 +82,43 @@ pub struct CopyResult {
     pub strategy: CopyStrategy,
     pub bytes_copied: Option<u64>,
     pub destination_etag: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum CredentialSourceKind {
+    DefaultChain,
+    Profile { name: String },
+    CredentialsFile { path: String },
+    InlineStatic,
+    Env { variables: Vec<String> },
+    InlineEnvMap,
+    None,
+}
+
+impl CredentialSourceKind {
+    pub fn from_config(credentials: &CredentialSource) -> Self {
+        match credentials {
+            CredentialSource::DefaultChain => Self::DefaultChain,
+            CredentialSource::Profile { name } => Self::Profile { name: name.clone() },
+            CredentialSource::CredentialsFile { path } => {
+                Self::CredentialsFile { path: path.clone() }
+            }
+            CredentialSource::InlineStatic { .. } => Self::InlineStatic,
+            CredentialSource::Env { variables } => Self::Env {
+                variables: variables.clone(),
+            },
+            CredentialSource::InlineEnvMap { .. } => Self::InlineEnvMap,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeResult {
+    pub provider: ProviderKind,
+    pub endpoint: Option<String>,
+    pub credential_source: CredentialSourceKind,
+    pub probe_method: String,
+    pub latency_ms: u64,
+    pub capabilities: Vec<Capability>,
 }

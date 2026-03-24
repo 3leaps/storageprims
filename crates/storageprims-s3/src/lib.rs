@@ -4,29 +4,33 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::error::{DisplayErrorContext, ProvideErrorMetadata};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
+use aws_sdk_sts::error::ProvideErrorMetadata as ProvideStsErrorMetadata;
 use bytes::Bytes;
 use http_body::{Frame, SizeHint};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use storageprims_core::{
-    BoxFuture, BoxedByteStream, Capability, CopyRequest, CopyResult, CopyStrategy,
-    CredentialSource, GetRangeRequest, ListOptions, ListResult, ObjectMetadata, ObjectSummary,
-    ProviderConfig, ProviderKind, PutOptions, PutResult, Result, StorageError, StorageOperation,
-    StorageProvider, StorageUri,
+    sanitize_endpoint, BoxFuture, BoxedByteStream, Capability, CopyRequest, CopyResult,
+    CopyStrategy, CredentialSource, CredentialSourceKind, GetRangeRequest, ListOptions, ListResult,
+    ObjectMetadata, ObjectSummary, ProbeResult, ProviderConfig, ProviderKind, PutOptions,
+    PutResult, Result, StorageError, StorageOperation, StorageProvider, StorageUri,
 };
 use tokio::io::{AsyncRead, ReadBuf};
 
 #[derive(Clone, Debug)]
 pub struct S3Provider {
     client: Client,
+    sts_client: aws_sdk_sts::Client,
     bucket: String,
     root_prefix: Option<String>,
+    endpoint: Option<String>,
+    credential_source: CredentialSourceKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,11 +110,15 @@ impl S3Provider {
         let mut service_config = aws_sdk_s3::config::Builder::from(&sdk_config);
         service_config.set_force_path_style(config.target.force_path_style);
         let client = Client::from_conf(service_config.build());
+        let sts_client = aws_sdk_sts::Client::new(&sdk_config);
 
         Ok(Self {
             client,
+            sts_client,
             bucket,
             root_prefix,
+            endpoint: config.target.endpoint.clone(),
+            credential_source: CredentialSourceKind::from_config(&config.credentials),
         })
     }
 
@@ -242,7 +250,11 @@ impl StorageProvider for S3Provider {
     }
 
     fn capabilities(&self) -> Vec<Capability> {
-        vec![Capability::DelimiterListing, Capability::MultipartUpload]
+        vec![
+            Capability::DelimiterListing,
+            Capability::MultipartUpload,
+            Capability::CredentialProbe,
+        ]
     }
 
     fn list(&self, options: ListOptions) -> BoxFuture<'_, ListResult> {
@@ -515,6 +527,57 @@ impl StorageProvider for S3Provider {
             self.relay_copy(&source, &destination).await
         })
     }
+
+    fn probe(&self) -> BoxFuture<'_, ProbeResult> {
+        Box::pin(async move { self.probe_credentials().await })
+    }
+}
+
+impl S3Provider {
+    async fn probe_credentials(&self) -> Result<ProbeResult> {
+        let started = Instant::now();
+
+        match self.sts_client.get_caller_identity().send().await {
+            Ok(_) => Ok(self.probe_result("sts:GetCallerIdentity", started.elapsed())),
+            Err(error) => {
+                if self.endpoint.is_some() && should_fallback_to_head_bucket_probe_error(&error) {
+                    self.probe_head_bucket(started).await
+                } else {
+                    Err(map_sts_probe_error(error))
+                }
+            }
+        }
+    }
+
+    async fn probe_head_bucket(&self, started: Instant) -> Result<ProbeResult> {
+        self.client
+            .head_bucket()
+            .bucket(&self.bucket)
+            .send()
+            .await
+            .map_err(|error| {
+                map_sdk_error(
+                    ProviderKind::S3,
+                    StorageOperation::Probe,
+                    None,
+                    Some(&self.bucket),
+                    error,
+                )
+            })?;
+
+        Ok(self.probe_result("s3:HeadBucket", started.elapsed()))
+    }
+
+    fn probe_result(&self, method: &str, elapsed: Duration) -> ProbeResult {
+        ProbeResult {
+            provider: ProviderKind::S3,
+            endpoint: self.endpoint.as_deref().map(sanitize_endpoint),
+            credential_source: self.credential_source.clone(),
+            probe_method: method.to_string(),
+            latency_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
+            capabilities: self.capabilities(),
+        }
+    }
 }
 
 async fn load_sdk_config(config: &ProviderConfig) -> Result<aws_config::SdkConfig> {
@@ -732,6 +795,96 @@ where
     }
 }
 
+fn map_sts_probe_error<E>(error: aws_sdk_sts::error::SdkError<E>) -> StorageError
+where
+    E: std::error::Error + ProvideStsErrorMetadata + Send + Sync + 'static,
+{
+    use aws_sdk_sts::error::SdkError;
+
+    match error {
+        SdkError::ServiceError(context) => {
+            let err = context.into_err();
+            match err.code().unwrap_or_default() {
+                "InvalidClientTokenId"
+                | "UnrecognizedClientException"
+                | "ExpiredToken"
+                | "SignatureDoesNotMatch" => StorageError::InvalidCredentials {
+                    provider: ProviderKind::S3,
+                    detail: err.code().unwrap_or("sts auth failure").to_string(),
+                },
+                "AccessDenied" | "AccessDeniedException" => StorageError::AccessDenied {
+                    provider: ProviderKind::S3,
+                    operation: StorageOperation::Probe,
+                    target: None,
+                    detail: "access denied".to_string(),
+                },
+                "Throttling" | "ThrottlingException" | "TooManyRequestsException" => {
+                    StorageError::Throttled {
+                        provider: ProviderKind::S3,
+                        operation: StorageOperation::Probe,
+                        retry_after: None,
+                    }
+                }
+                _ => StorageError::Other {
+                    provider: Some(ProviderKind::S3),
+                    operation: Some(StorageOperation::Probe),
+                    detail: format!("{}", DisplayErrorContext(&err)),
+                    source: None,
+                },
+            }
+        }
+        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) | SdkError::ResponseError(_) => {
+            StorageError::ProviderUnavailable {
+                provider: ProviderKind::S3,
+                operation: StorageOperation::Probe,
+                detail: format!("{}", DisplayErrorContext(&error)),
+            }
+        }
+        SdkError::ConstructionFailure(construction_error) => StorageError::InvalidArgument {
+            operation: Some(StorageOperation::Probe),
+            argument: "probe".to_string(),
+            reason: format!("{construction_error:?}"),
+        },
+        other => StorageError::Other {
+            provider: Some(ProviderKind::S3),
+            operation: Some(StorageOperation::Probe),
+            detail: format!("{}", DisplayErrorContext(&other)),
+            source: None,
+        },
+    }
+}
+
+fn should_fallback_to_head_bucket_probe_error<E>(error: &aws_sdk_sts::error::SdkError<E>) -> bool
+where
+    E: std::error::Error + ProvideStsErrorMetadata + Send + Sync + 'static,
+{
+    use aws_sdk_sts::error::SdkError;
+
+    match error {
+        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) | SdkError::ResponseError(_) => {
+            true
+        }
+        SdkError::ServiceError(context) => {
+            let code = context.err().code().unwrap_or_default();
+            let message = context
+                .err()
+                .message()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+
+            matches!(
+                code,
+                "InternalFailure" | "UnknownOperationException" | "InvalidAction"
+            ) && (message.contains("service 'sts' is not enabled")
+                || message.contains("sts")
+                    && (message.contains("not enabled")
+                        || message.contains("unknown operation")
+                        || message.contains("invalid action")))
+        }
+        _ => false,
+    }
+}
+
 fn parse_retry_after(message: &str) -> Option<Duration> {
     let marker = "retry-after:";
     let lower = message.to_ascii_lowercase();
@@ -855,6 +1008,7 @@ impl http_body::Body for AsyncReadBody {
 mod tests {
     use super::*;
     use aws_sdk_s3::operation::{get_object::GetObjectError, head_object::HeadObjectError};
+    use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
     use aws_smithy_runtime_api::http::{Response, StatusCode};
     use aws_smithy_types::body::SdkBody;
     use aws_smithy_types::error::ErrorMetadata;
@@ -889,8 +1043,17 @@ mod tests {
                     .credentials_provider(Credentials::from_keys("test", "test", None))
                     .build(),
             ),
+            sts_client: aws_sdk_sts::Client::from_conf(
+                aws_sdk_sts::config::Builder::new()
+                    .behavior_version_latest()
+                    .region(Region::new("us-east-1"))
+                    .credentials_provider(Credentials::from_keys("test", "test", None))
+                    .build(),
+            ),
             bucket: "bucket-a".to_string(),
             root_prefix: Some("root".to_string()),
+            endpoint: None,
+            credential_source: CredentialSourceKind::DefaultChain,
         };
 
         let relative = provider
@@ -945,6 +1108,73 @@ mod tests {
             encode_copy_source("bucket-a", "path with spaces/a+b#c.txt"),
             "bucket%2Da/path%20with%20spaces%2Fa%2Bb%23c%2Etxt"
         );
+    }
+
+    #[test]
+    fn should_fallback_to_head_bucket_for_disabled_sts_errors_only() {
+        let disabled_sts = aws_sdk_sts::error::SdkError::service_error(
+            GetCallerIdentityError::generic(
+                ErrorMetadata::builder()
+                    .code("InternalFailure")
+                    .message("Service 'sts' is not enabled. Please check your 'SERVICES' configuration variable.")
+                    .build(),
+            ),
+            Response::new(
+                StatusCode::try_from(500).expect("valid status"),
+                SdkBody::empty(),
+            ),
+        );
+        assert!(should_fallback_to_head_bucket_probe_error(&disabled_sts));
+
+        let invalid_credentials = aws_sdk_sts::error::SdkError::service_error(
+            GetCallerIdentityError::generic(
+                ErrorMetadata::builder()
+                    .code("InvalidClientTokenId")
+                    .message("The security token included in the request is invalid.")
+                    .build(),
+            ),
+            Response::new(
+                StatusCode::try_from(403).expect("valid status"),
+                SdkBody::empty(),
+            ),
+        );
+        assert!(!should_fallback_to_head_bucket_probe_error(
+            &invalid_credentials
+        ));
+    }
+
+    #[test]
+    fn probe_result_sanitizes_endpoint_and_reports_configured_source() {
+        let provider = S3Provider {
+            client: Client::from_conf(
+                aws_sdk_s3::config::Builder::new()
+                    .behavior_version_latest()
+                    .region(Region::new("us-east-1"))
+                    .credentials_provider(Credentials::from_keys("test", "test", None))
+                    .build(),
+            ),
+            sts_client: aws_sdk_sts::Client::from_conf(
+                aws_sdk_sts::config::Builder::new()
+                    .behavior_version_latest()
+                    .region(Region::new("us-east-1"))
+                    .credentials_provider(Credentials::from_keys("test", "test", None))
+                    .build(),
+            ),
+            bucket: "bucket-a".to_string(),
+            root_prefix: None,
+            endpoint: Some("https://user:pass@example.com:9000".to_string()),
+            credential_source: CredentialSourceKind::InlineStatic,
+        };
+
+        let result = provider.probe_result("s3:HeadBucket", Duration::from_millis(17));
+        assert_eq!(
+            result.endpoint.as_deref(),
+            Some("https://***@example.com:9000")
+        );
+        assert_eq!(result.credential_source, CredentialSourceKind::InlineStatic);
+        assert_eq!(result.probe_method, "s3:HeadBucket");
+        assert_eq!(result.latency_ms, 17);
+        assert!(result.capabilities.contains(&Capability::CredentialProbe));
     }
 
     #[tokio::test]

@@ -8,8 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use storageprims_core::{
-    BoxedByteStream, CopyRequest, CredentialSource, GetRangeRequest, ProviderConfig, ProviderKind,
-    PutOptions, StorageError, StorageProvider, TargetConfig,
+    BoxedByteStream, Capability, CopyRequest, CredentialSource, CredentialSourceKind,
+    GetRangeRequest, ProviderConfig, ProviderKind, PutOptions, StorageError, StorageProvider,
+    TargetConfig,
 };
 use storageprims_s3::S3Provider;
 use tokio::io::AsyncReadExt;
@@ -343,6 +344,24 @@ async fn s3_provider_surfaces_provider_unavailable_for_unreachable_endpoint() {
         .await
         .expect_err("unreachable endpoint should fail");
     assert!(matches!(error, StorageError::ProviderUnavailable { .. }));
+}
+
+#[tokio::test]
+async fn s3_provider_probe_uses_head_bucket_fallback_against_localstack() {
+    let test_context = TestContext::new().await;
+    let provider = test_context.provider().await;
+
+    let result = provider.probe().await.expect("probe succeeds");
+    assert_eq!(result.provider, ProviderKind::S3);
+    assert_eq!(result.probe_method, "s3:HeadBucket");
+    assert_eq!(
+        result.endpoint.as_deref(),
+        Some(test_context.endpoint.as_str())
+    );
+    assert_eq!(result.credential_source, CredentialSourceKind::InlineStatic);
+    assert!(result.latency_ms < 30_000);
+    assert!(result.capabilities.contains(&Capability::CredentialProbe));
+    assert!(result.capabilities.contains(&Capability::DelimiterListing));
 }
 
 struct TestContext {
