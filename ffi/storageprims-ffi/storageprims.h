@@ -130,6 +130,18 @@ StorageprimsErrorCode storageprims_copy(uint64_t handle,
                                         char **out_result_json);
 
 /**
+ * Validate provider credentials and connectivity via the JSON control plane.
+ *
+ * # Safety
+ *
+ * `out_result_json` must be non-null and writable for a `char*` returned by
+ * `storageprims_free_string`.
+ */
+StorageprimsErrorCode storageprims_probe(uint64_t handle,
+                                         uint64_t provider_id,
+                                         char **out_result_json);
+
+/**
  * Read the first `n` logical lines via the JSON control plane.
  *
  * # Safety

@@ -74,6 +74,30 @@ impl fmt::Debug for ProviderConfig {
     }
 }
 
+pub fn sanitize_endpoint(endpoint: &str) -> String {
+    let Some(scheme_offset) = endpoint.find("://") else {
+        return endpoint.to_string();
+    };
+
+    let authority_start = scheme_offset + 3;
+    let authority_end = endpoint[authority_start..]
+        .find(['/', '?', '#'])
+        .map(|offset| authority_start + offset)
+        .unwrap_or(endpoint.len());
+    let authority = &endpoint[authority_start..authority_end];
+
+    let Some(at_offset) = authority.rfind('@') else {
+        return endpoint.to_string();
+    };
+
+    let mut sanitized = String::with_capacity(endpoint.len());
+    sanitized.push_str(&endpoint[..authority_start]);
+    sanitized.push_str("***@");
+    sanitized.push_str(&authority[at_offset + 1..]);
+    sanitized.push_str(&endpoint[authority_end..]);
+    sanitized
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -142,5 +166,21 @@ mod tests {
         assert!(!debug.contains("very-secret-token"));
         assert!(debug.contains("ACCESS_TOKEN"));
         assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn sanitize_endpoint_strips_userinfo() {
+        assert_eq!(
+            sanitize_endpoint("https://user:pass@example.com:9000/path?x=1"),
+            "https://***@example.com:9000/path?x=1"
+        );
+    }
+
+    #[test]
+    fn sanitize_endpoint_leaves_plain_urls_unchanged() {
+        assert_eq!(
+            sanitize_endpoint("https://example.com:9000/path?x=1"),
+            "https://example.com:9000/path?x=1"
+        );
     }
 }

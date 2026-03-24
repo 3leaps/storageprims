@@ -11,7 +11,7 @@ mod stream;
 
 pub use control::{
     storageprims_copy, storageprims_count_lines, storageprims_delete, storageprims_head,
-    storageprims_head_lines, storageprims_list, storageprims_mid_lines,
+    storageprims_head_lines, storageprims_list, storageprims_mid_lines, storageprims_probe,
     storageprims_provider_create, storageprims_provider_destroy, storageprims_tail_lines,
 };
 pub use error::{

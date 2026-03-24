@@ -10,14 +10,14 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use serde::Deserialize;
 use storageprims_core::{
-    CopyRequest, CredentialSource, ListOptions, ProviderConfig, ProviderKind, PutOptions,
-    TargetConfig,
+    CopyRequest, CredentialSource, CredentialSourceKind, ListOptions, ProbeResult, ProviderConfig,
+    ProviderKind, PutOptions, TargetConfig,
 };
 use storageprims_ffi::{
     storageprims_clear_error, storageprims_copy, storageprims_count_lines, storageprims_delete,
     storageprims_free_string, storageprims_get, storageprims_get_finalize, storageprims_get_range,
     storageprims_head, storageprims_head_lines, storageprims_init, storageprims_last_error,
-    storageprims_list, storageprims_mid_lines, storageprims_provider_create,
+    storageprims_list, storageprims_mid_lines, storageprims_probe, storageprims_provider_create,
     storageprims_provider_destroy, storageprims_put_begin, storageprims_put_finalize,
     storageprims_shutdown, storageprims_tail_lines, StorageprimsErrorCode,
 };
@@ -181,6 +181,36 @@ fn ffi_line_ops_round_trip_against_localstack() {
         unsafe { storageprims_count_lines(handle, provider_id, key.as_ptr(), out) }
     });
     assert_eq!(counted.count, 5);
+
+    assert_eq!(
+        storageprims_provider_destroy(handle, provider_id),
+        StorageprimsErrorCode::Ok
+    );
+    assert_eq!(storageprims_shutdown(handle), StorageprimsErrorCode::Ok);
+}
+
+#[test]
+fn ffi_probe_uses_head_bucket_fallback_against_localstack() {
+    let endpoint = endpoint();
+    let bucket = format!("storageprims-ffi-it-{}", unique_suffix());
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+    runtime.block_on(create_bucket(&endpoint, &bucket));
+
+    let handle = storageprims_init();
+    assert!(handle > 0);
+
+    let provider_id = create_provider(handle, &bucket, &endpoint);
+
+    let result: ProbeResult =
+        call_json_out(|out| unsafe { storageprims_probe(handle, provider_id, out) });
+    assert_eq!(result.provider, ProviderKind::S3);
+    assert_eq!(result.probe_method, "s3:HeadBucket");
+    assert_eq!(result.credential_source, CredentialSourceKind::InlineStatic);
+    assert!(result.latency_ms < 30_000);
+    assert!(result
+        .capabilities
+        .contains(&storageprims_core::Capability::CredentialProbe));
+    assert_eq!(result.endpoint.as_deref(), Some(endpoint.as_str()));
 
     assert_eq!(
         storageprims_provider_destroy(handle, provider_id),

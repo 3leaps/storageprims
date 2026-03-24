@@ -14,6 +14,7 @@ integration = []
 aws-config.workspace = true
 aws-credential-types.workspace = true
 aws-sdk-s3.workspace = true
+aws-sdk-sts.workspace = true
 bytes.workspace = true
 http-body.workspace = true
 percent-encoding.workspace = true

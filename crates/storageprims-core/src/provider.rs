@@ -7,18 +7,20 @@ use tokio::io::AsyncRead;
 
 use crate::error::{ProviderKind, Result};
 use crate::types::{
-    CopyRequest, CopyResult, GetRangeRequest, ListOptions, ListResult, ObjectMetadata, PutOptions,
-    PutResult,
+    CopyRequest, CopyResult, GetRangeRequest, ListOptions, ListResult, ObjectMetadata, ProbeResult,
+    PutOptions, PutResult,
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 pub type BoxedByteStream = Box<dyn AsyncRead + Send + Unpin>;
 
 /// Optional provider capabilities beyond the universal contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Capability {
     DelimiterListing,
     MultipartUpload,
+    CredentialProbe,
 }
 
 /// Canonical storage provider trait for v0.1.
@@ -49,6 +51,16 @@ pub trait StorageProvider: Send + Sync {
     fn delete(&self, key: &str) -> BoxFuture<'_, ()>;
 
     fn copy(&self, request: CopyRequest) -> BoxFuture<'_, CopyResult>;
+
+    fn probe(&self) -> BoxFuture<'_, ProbeResult> {
+        Box::pin(async move {
+            Err(crate::error::StorageError::UnsupportedCapability {
+                provider: self.provider_kind(),
+                operation: crate::error::StorageOperation::Probe,
+                capability: Capability::CredentialProbe,
+            })
+        })
+    }
 }
 
 #[cfg(test)]
@@ -146,5 +158,23 @@ mod tests {
         assert_eq!(provider.provider_kind(), ProviderKind::Local);
         assert!(provider.has_capability(Capability::DelimiterListing));
         assert!(!provider.has_capability(Capability::MultipartUpload));
+    }
+
+    #[test]
+    fn default_probe_returns_unsupported_capability() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+        let provider = DummyProvider;
+        let error = runtime
+            .block_on(provider.probe())
+            .expect_err("default probe should be unsupported");
+
+        assert!(matches!(
+            error,
+            crate::error::StorageError::UnsupportedCapability {
+                provider: ProviderKind::Local,
+                operation: crate::error::StorageOperation::Probe,
+                capability: Capability::CredentialProbe,
+            }
+        ));
     }
 }

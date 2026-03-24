@@ -2,9 +2,13 @@ use std::os::raw::c_char;
 
 use serde::Serialize;
 use storageprims_core::{
-    CopyRequest, ListOptions, ObjectMetadata, ProviderConfig, StorageError, StorageOperation,
+    CopyRequest, ListOptions, ObjectMetadata, ProbeResult, ProviderConfig, StorageError,
+    StorageOperation,
 };
-use storageprims_ops::{count_lines, head_lines_with_options, mid_lines, tail_lines, LineOptions};
+use storageprims_ops::{
+    count_lines, head_lines_with_options, mid_lines_with_options, tail_lines_with_options,
+    LineOptions,
+};
 
 use crate::error::{with_error_boundary, StorageprimsErrorCode};
 use crate::ffi_support::{
@@ -190,6 +194,30 @@ pub unsafe extern "C" fn storageprims_copy(
     }
 }
 
+/// Validate provider credentials and connectivity via the JSON control plane.
+///
+/// # Safety
+///
+/// `out_result_json` must be non-null and writable for a `char*` returned by
+/// `storageprims_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn storageprims_probe(
+    handle: u64,
+    provider_id: u64,
+    out_result_json: *mut *mut c_char,
+) -> StorageprimsErrorCode {
+    match with_error_boundary(|| {
+        initialize_out_json(out_result_json, "out_result_json", StorageOperation::Probe)?;
+        let runtime = get_runtime(handle)?;
+        let provider = runtime.provider(provider_id)?;
+        let result: ProbeResult = runtime.block_on(provider.probe())?;
+        write_json(out_result_json, &result)
+    }) {
+        Ok(()) => StorageprimsErrorCode::Ok,
+        Err(code) => code,
+    }
+}
+
 /// Read the first `n` logical lines via the JSON control plane.
 ///
 /// # Safety
@@ -271,7 +299,8 @@ pub unsafe extern "C" fn storageprims_tail_lines(
             argument: "n".to_string(),
             reason: "line count exceeds supported size".to_string(),
         })?;
-        let result = runtime.block_on(tail_lines(provider.as_ref(), &key, n, options))?;
+        let result =
+            runtime.block_on(tail_lines_with_options(provider.as_ref(), &key, n, options))?;
         write_json(out_result_json, &result)
     }) {
         Ok(()) => StorageprimsErrorCode::Ok,
@@ -315,7 +344,8 @@ pub unsafe extern "C" fn storageprims_mid_lines(
             argument: "n".to_string(),
             reason: "line count exceeds supported size".to_string(),
         })?;
-        let result = runtime.block_on(mid_lines(provider.as_ref(), &key, n, options))?;
+        let result =
+            runtime.block_on(mid_lines_with_options(provider.as_ref(), &key, n, options))?;
         write_json(out_result_json, &result)
     }) {
         Ok(()) => StorageprimsErrorCode::Ok,
