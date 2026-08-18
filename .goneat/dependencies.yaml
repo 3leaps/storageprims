@@ -20,6 +20,7 @@ licenses:
     - 0BSD
     - BSD-3-Clause
     - ISC
+    - OpenSSL
     - Zlib
     - Unlicense
     - CC0-1.0
