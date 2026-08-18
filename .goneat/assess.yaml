@@ -6,25 +6,23 @@
 # cargo clippy --workspace --all-targets -- -D warnings) for parity
 # with repository quality expectations.
 #
-# This config primarily scopes additional non-Rust lint checks.
-# Keep comments current with the installed goneat release.
+# Requires goneat v0.5.16+ and Rust toolchain >= 1.88 (see rust-toolchain.toml).
 version: 1
-# Rust toolchain checks - FUTURE (goneat v0.4.1+)
-# rust:
-#   fmt:
-#     enabled: true
-#     fix: true
-#   clippy:
-#     enabled: true
-#     deny_warnings: true
-#   deny:
-#     enabled: true
-#     checks: [licenses, advisories, bans, sources]
-#   paths:
-#     - "crates/**/*.rs"
-#     - "ffi/**/*.rs"
-#   ignore:
-#     - "**/target/**"
+rust:
+  fmt:
+    enabled: true
+    fix: true
+  clippy:
+    enabled: true
+    deny_warnings: true
+  deny:
+    enabled: true
+    checks: [licenses, advisories, bans, sources]
+  paths:
+    - "crates/**/*.rs"
+    - "ffi/**/*.rs"
+  ignore:
+    - "**/target/**"
 lint:
   # YAML linting (CI workflows, configs)
   yamllint:

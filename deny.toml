@@ -23,10 +23,14 @@ feature-depth = 1
 # ============================================================================
 [advisories]
 ignore = [
-    # Temporary: exact AWS SDK pins in Cargo.toml still pull rustls-webpki 0.101.7
-    # through the legacy hyper-rustls 0.24 path. Tracked for follow-up dependency
-    # refresh after SP-010 so this branch can stay scoped to line-ops delivery.
-    "RUSTSEC-2026-0049",
+    # Legacy hyper-rustls 0.24 / rustls 0.21 path via pinned AWS SDK 1.8.x.
+    # Tracked for refresh when AWS SDK pins advance (aws-smithy-http-client).
+    "RUSTSEC-2026-0044",
+    "RUSTSEC-2026-0048",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0258",
 ]
 
 # ============================================================================
@@ -42,6 +46,7 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
+    "OpenSSL",
     "Zlib",
     "0BSD",
     "Unlicense",

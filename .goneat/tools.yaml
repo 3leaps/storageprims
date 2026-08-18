@@ -49,6 +49,7 @@ scopes:
   rust:
     description: Rust development and quality tools
     tools:
+      - rust
       - cargo-deny
       - cargo-audit
       - cargo-edit
@@ -200,34 +201,63 @@ tools:
   # ==========================================================================
   # Rust Tools
   # ==========================================================================
+  rust:
+    name: rust
+    description: Rust toolchain - required for core library and FFI (minimum 1.88)
+    kind: system
+    detect_command: rustc --version
+    platforms:
+      - darwin
+      - linux
+      - windows
+    installer_priority:
+      all:
+        - manual
+    install_commands:
+      manual: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    version_scheme: semver
+    minimum_version: 1.88.0
+    recommended_version: 1.89.0
   cargo-deny:
     name: cargo-deny
     description: Cargo plugin for license and advisory checks
     kind: cargo
-    detect_command: cargo-deny --version
+    detect_command: cargo deny --version
+    install_package: cargo-deny
     version_args:
+      - deny
       - --version
     check_args:
+      - deny
       - --help
     installer_priority:
       all:
         - cargo-install
     install_commands:
       cargo-install: cargo install cargo-deny --locked
+    version_scheme: semver
+    minimum_version: 0.14.0
+    recommended_version: 0.16.0
   cargo-audit:
     name: cargo-audit
     description: Cargo plugin for security vulnerability auditing
     kind: cargo
-    detect_command: cargo-audit --version
+    detect_command: cargo audit --version
+    install_package: cargo-audit
     version_args:
+      - audit
       - --version
     check_args:
+      - audit
       - --help
     installer_priority:
       all:
         - cargo-install
     install_commands:
       cargo-install: cargo install cargo-audit --locked
+    version_scheme: semver
+    minimum_version: 0.18.0
+    recommended_version: 0.21.0
   cargo-edit:
     name: cargo-edit
     description: Cargo plugin for version management (cargo set-version)
