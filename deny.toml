@@ -23,10 +23,9 @@ feature-depth = 1
 # ============================================================================
 [advisories]
 ignore = [
-    # Legacy hyper-rustls 0.24 / rustls 0.21 path via pinned AWS SDK 1.8.x.
-    # Tracked for refresh when AWS SDK pins advance (aws-smithy-http-client).
-    "RUSTSEC-2026-0044",
-    "RUSTSEC-2026-0048",
+    # Upstream AWS SDK: aws-smithy-http-client still ships hyper-rustls 0.24 /
+    # rustls 0.21 alongside the modern rustls 0.23 stack. Tracked upstream in
+    # smithy-rs; no fix available via dependency pin alone (verified at SDK 1.10.1).
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
