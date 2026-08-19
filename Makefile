@@ -46,7 +46,7 @@ CARGO_NEXTEST = $(shell command -v cargo-nextest 2>/dev/null)
 CARGO = cargo
 
 # MSRV (Minimum Supported Rust Version)
-MSRV = 1.89
+MSRV = 1.94.1
 
 # -----------------------------------------------------------------------------
 # Default and Help
@@ -118,15 +118,15 @@ bootstrap: ## Install required tools (sfetch -> goneat)
 	@if ! command -v cargo >/dev/null 2>&1; then \
 		echo "[!!] cargo not found (required)"; \
 		echo ""; \
-		echo "Install Rust toolchain (minimum 1.88):"; \
+		echo "Install Rust toolchain (minimum 1.94.1):"; \
 		echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"; \
 		exit 1; \
 	fi
 	@RUST_VER=$$(rustc --version 2>/dev/null | sed -n 's/rustc \([0-9]*\.[0-9]*\).*/\1/p'); \
-	RUST_MIN="1.88"; \
+	RUST_MIN="1.94.1"; \
 	if [ -z "$$RUST_VER" ] || [ "$$(printf '%s\n%s\n' "$$RUST_MIN" "$$RUST_VER" | sort -V | head -n1)" != "$$RUST_MIN" ]; then \
 		echo "[!!] Rust $$RUST_MIN+ required (found: $${RUST_VER:-unknown})"; \
-		echo "  rustup install 1.89.0 && rustup default 1.89.0"; \
+		echo "  rustup install 1.94.1 && rustup default 1.94.1"; \
 		exit 1; \
 	fi
 	@echo "[ok] cargo: $$(cargo --version)"

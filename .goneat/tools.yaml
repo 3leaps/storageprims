@@ -203,7 +203,7 @@ tools:
   # ==========================================================================
   rust:
     name: rust
-    description: Rust toolchain - required for core library and FFI (minimum 1.88)
+    description: Rust toolchain - required for core library and FFI (minimum 1.94.1)
     kind: system
     detect_command: rustc --version
     platforms:
@@ -216,8 +216,8 @@ tools:
     install_commands:
       manual: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     version_scheme: semver
-    minimum_version: 1.88.0
-    recommended_version: 1.89.0
+    minimum_version: 1.94.1
+    recommended_version: 1.94.1
   cargo-deny:
     name: cargo-deny
     description: Cargo plugin for license and advisory checks

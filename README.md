@@ -1,7 +1,7 @@
 # storageprims
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
-[![Rust: 1.89+](https://img.shields.io/badge/Rust-1.89+-orange.svg)](https://www.rust-lang.org)
+[![Rust: 1.94+](https://img.shields.io/badge/Rust-1.94+-orange.svg)](https://www.rust-lang.org)
 
 **Uniform, cross-language cloud storage primitives — one Rust implementation, consumed everywhere.**
 
@@ -129,7 +129,7 @@ Provider follow-on work should use the reusable hardening checklist in [docs/pro
 - **License**: MIT OR Apache-2.0 (dual, permissive)
 - **License compliance**: `cargo deny` enforces no GPL/LGPL/AGPL dependencies
 - **Security audit**: `cargo audit` for known vulnerabilities
-- **MSRV**: 1.89.0
+- **MSRV**: 1.94.1
 
 ## License
 
