@@ -1,0 +1,177 @@
+# storageprims CI
+#
+# Required checks: fast, platforms, integration-s3, publish-check.
+# The native matrix covers all five supported desktop/server platforms on
+# every push and pull request. `platforms` is its stable required aggregate.
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  fast:
+    name: fast
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/fulmenhq/goneat-tools-runner-glibc@sha256:afcffa00283c765928dfef40966c282f2ca190653cf4443f634cb8f67c1d51ab
+      options: --user 1001:1001
+    env:
+      HOME: /github/home
+      RUSTUP_HOME: /github/home/.rustup
+      CARGO_HOME: /github/home/.cargo
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
+        with:
+          toolchain: 1.89.0
+          components: rustfmt, clippy
+      - name: Verify runner and MSRV
+        run: |
+          set -euo pipefail
+          test "$(id -u):$(id -g)" = "1001:1001"
+          rustc --version | grep '^rustc 1\.89\.0 '
+          for tool in goneat yamlfmt yamllint actionlint cargo-deny; do
+            command -v "${tool}"
+          done
+      - name: Format
+        run: |
+          cargo fmt --all -- --check
+          goneat format --check --quiet
+      - name: YAML and workflow lint
+        run: |
+          yamllint -c .yamllint .github/workflows .goneat
+          actionlint .github/workflows/ci.yml
+      - name: Lint
+        run: |
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          goneat assess --categories lint --fail-on medium --ci-summary --log-level warn --output /dev/null
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Version consistency
+        run: make version-check
+      - name: Dependency policy
+        run: cargo deny check
+  platform_smoke:
+    name: platform-smoke (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-latest-arm64-s
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: windows-latest-arm64-s
+            target: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
+        with:
+          toolchain: 1.89.0
+          components: clippy
+      - name: Verify native host
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | awk '/^host:/{print $2}')
+          test "$host" = "${{ matrix.target }}"
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Build release
+        run: cargo build --workspace --release --locked
+  platforms:
+    name: platforms
+    if: always()
+    needs: platform_smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require all native platforms
+        run: test "${{ needs.platform_smoke.result }}" = "success"
+  integration-s3:
+    name: integration-s3
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
+        with:
+          toolchain: 1.89.0
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff  # v2.87.8
+        with:
+          tool: cargo-nextest@0.9.128
+      - name: Start LocalStack
+        run: docker compose -f docker-compose.localstack.yml up -d localstack
+      - name: Wait for LocalStack
+        run: |
+          set -euo pipefail
+          for _i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4566/_localstack/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "LocalStack failed to become healthy"
+          exit 1
+      - name: Run S3 integration tests
+        env:
+          STORAGEPRIMS_S3_TEST_ENDPOINT: http://127.0.0.1:4566
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_REGION: us-east-1
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: cargo nextest run -p storageprims-s3 --features integration --test integration_s3
+      - name: Stop LocalStack
+        if: always()
+        run: docker compose -f docker-compose.localstack.yml down -v
+  publish-check:
+    name: publish-check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
+        with:
+          toolchain: 1.89.0
+      - name: Package workspace
+        run: cargo package --workspace

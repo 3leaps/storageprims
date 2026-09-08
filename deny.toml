@@ -22,12 +22,7 @@ feature-depth = 1
 # Advisories (Security)
 # ============================================================================
 [advisories]
-ignore = [
-    # Temporary: exact AWS SDK pins in Cargo.toml still pull rustls-webpki 0.101.7
-    # through the legacy hyper-rustls 0.24 path. Tracked for follow-up dependency
-    # refresh after SP-010 so this branch can stay scoped to line-ops delivery.
-    "RUSTSEC-2026-0049",
-]
+ignore = []
 
 # ============================================================================
 # Licenses

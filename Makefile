@@ -14,15 +14,15 @@
 .PHONY: precommit prepush deny audit msrv
 .PHONY: build-release build-ffi cbindgen pr-final
 .PHONY: build-local-go build-local-ffi-shared go-test header-go
-.PHONY: version-patch version-minor version-major version-set
+.PHONY: version-patch version-minor version-major version-set version-sync version-check
+.PHONY: release-check release-preflight
 
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
 
-# Version from Cargo.toml (SSOT) - extracted via cargo metadata
-VERSION := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null | \
-	grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "dev")
+VERSION_FILE := VERSION
+VERSION := $(shell tr -d ' \t\r\n' < $(VERSION_FILE) 2>/dev/null || echo dev)
 
 # Tool installation directory
 # Bootstrap installs sfetch to repo-local bin/
@@ -87,10 +87,14 @@ help: ## Show available targets
 	@echo ""
 	@echo "Version management:"
 	@echo "  version         Print current version"
+	@echo "  version-check   Validate version consistency across files"
 	@echo "  version-patch   Bump patch version (0.1.0 -> 0.1.1)"
 	@echo "  version-minor   Bump minor version (0.1.0 -> 0.2.0)"
 	@echo "  version-major   Bump major version (0.1.0 -> 1.0.0)"
 	@echo "  version-set     Set explicit version (V=X.Y.Z)"
+	@echo "  version-sync    Sync VERSION to Cargo.toml"
+	@echo "  release-check   Validate versions and package the workspace"
+	@echo "  release-preflight Verify clean-tree pre-tag requirements"
 	@echo ""
 	@echo "Current version: $(VERSION)"
 
@@ -256,9 +260,9 @@ tools: ## Verify external tools are available
 check: fmt-check lint test deny ## Run all quality checks
 	@echo "[ok] All quality checks passed"
 
-test: ## Run test suite
+test: ## Run locked test suite
 	@echo "Running tests..."
-	$(CARGO) test --workspace
+	$(CARGO) test --workspace --locked
 	@echo "[ok] Tests passed"
 
 test-integration-s3: ## Run S3 LocalStack integration tests
@@ -338,8 +342,8 @@ audit: ## Run cargo-audit security scan
 msrv: ## Verify build with Minimum Supported Rust Version
 	@echo "Checking MSRV ($(MSRV))..."
 	@if rustup run $(MSRV) cargo --version >/dev/null 2>&1; then \
-		rustup run $(MSRV) cargo build --workspace && \
-		rustup run $(MSRV) cargo test --workspace; \
+		rustup run $(MSRV) cargo build --workspace --locked && \
+		rustup run $(MSRV) cargo test --workspace --locked; \
 	else \
 		echo "[!!] Rust $(MSRV) not installed. Install with:"; \
 		echo "  rustup install $(MSRV)"; \
@@ -350,10 +354,10 @@ msrv: ## Verify build with Minimum Supported Rust Version
 precommit: fmt lint ## Pre-commit checks (fast: fmt, clippy)
 	@echo "[ok] Pre-commit checks passed"
 
-prepush: fmt-check lint test deny ## Pre-push checks (thorough)
+prepush: fmt-check lint test deny version-check ## Pre-push checks (thorough)
 	@echo "[ok] Pre-push checks passed"
 
-pr-final: fmt cbindgen fmt-check lint test deny test-integration-s3 test-integration-ffi ## Final PR gate before push/PR update
+pr-final: fmt cbindgen fmt-check lint test deny version-check test-integration-s3 test-integration-ffi ## Final PR gate before push/PR update
 	@echo "[ok] PR final checks passed"
 
 # -----------------------------------------------------------------------------
@@ -460,18 +464,76 @@ version: ## Print current version
 	@echo "$(VERSION)"
 
 version-patch: ## Bump patch version
-	@cargo set-version --workspace --bump patch
-	@echo "[ok] Bumped to $$(cargo metadata --no-deps --format-version 1 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)"
+	@current=$$(tr -d ' \t\r\n' < $(VERSION_FILE)); \
+	major=$$(echo "$$current" | cut -d. -f1); \
+	minor=$$(echo "$$current" | cut -d. -f2); \
+	patch=$$(echo "$$current" | cut -d. -f3); \
+	new_version="$$major.$$minor.$$((patch + 1))"; \
+	echo "$$new_version" > $(VERSION_FILE); \
+	$(MAKE) version-sync --silent; \
+	echo "Version bumped: $$current -> $$new_version"
 
 version-minor: ## Bump minor version
-	@cargo set-version --workspace --bump minor
-	@echo "[ok] Bumped to $$(cargo metadata --no-deps --format-version 1 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)"
+	@current=$$(tr -d ' \t\r\n' < $(VERSION_FILE)); \
+	major=$$(echo "$$current" | cut -d. -f1); \
+	minor=$$(echo "$$current" | cut -d. -f2); \
+	new_version="$$major.$$((minor + 1)).0"; \
+	echo "$$new_version" > $(VERSION_FILE); \
+	$(MAKE) version-sync --silent; \
+	echo "Version bumped: $$current -> $$new_version"
 
 version-major: ## Bump major version
-	@cargo set-version --workspace --bump major
-	@echo "[ok] Bumped to $$(cargo metadata --no-deps --format-version 1 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)"
+	@current=$$(tr -d ' \t\r\n' < $(VERSION_FILE)); \
+	major=$$(echo "$$current" | cut -d. -f1); \
+	new_version="$$((major + 1)).0.0"; \
+	echo "$$new_version" > $(VERSION_FILE); \
+	$(MAKE) version-sync --silent; \
+	echo "Version bumped: $$current -> $$new_version"
 
 version-set: ## Set explicit version (V=X.Y.Z)
 	@if [ -z "$(V)" ]; then echo "[!!] Usage: make version-set V=X.Y.Z"; exit 1; fi
-	@cargo set-version --workspace $(V)
+	@echo "$(V)" > $(VERSION_FILE)
+	@$(MAKE) version-sync --silent
 	@echo "[ok] Set version to $(V)"
+
+version-sync: ## Sync VERSION file to Cargo.toml
+	@ver=$$(tr -d ' \t\r\n' < $(VERSION_FILE)); \
+	if cargo set-version -V >/dev/null 2>&1 && cargo set-version --workspace "$$ver"; then \
+		echo "[ok] Synced Cargo.toml to $$ver"; \
+	else \
+		python3 -c "\
+import pathlib, re, sys; \
+ver = sys.argv[1]; \
+p = pathlib.Path('Cargo.toml'); \
+text = p.read_text(); \
+text, n = re.subn(r'(?m)^version = \"[^\"]*\"', 'version = \"%s\"' % ver, text, count=1); \
+assert n == 1, 'failed to update [workspace.package] version'; \
+text = re.sub(r'(storageprims-(?:core|ops|s3|ffi) = \{ version = )\"[^\"]*\"', r'\1\"%s\"' % ver, text); \
+p.write_text(text); \
+" "$$ver" || exit 1; \
+		echo "[ok] Synced Cargo.toml to $$ver (python fallback)"; \
+	fi
+
+version-check: ## Validate version consistency across files
+	@echo "Checking version consistency..."
+	@./scripts/check-version.sh
+
+# -----------------------------------------------------------------------------
+# Release
+# -----------------------------------------------------------------------------
+
+release-check: version-check ## Version consistency + package check (does not publish)
+	@echo "Packaging workspace crates (does not cargo publish)..."
+	@$(CARGO) package --workspace
+	@echo "[ok] Package check passed; cargo publish was not run"
+
+release-preflight: ## Verify clean-tree pre-tag requirements
+	@echo "Running release preflight checks..."
+	@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
+		echo "[!!] Working tree not clean - commit or stash changes first"; \
+		git status --short; \
+		exit 1; \
+	fi
+	@$(MAKE) prepush --silent
+	@$(MAKE) version-check --silent
+	@echo "[ok] All preflight checks passed - ready to tag v$(VERSION)"
