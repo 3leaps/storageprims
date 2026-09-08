@@ -1,16 +1,17 @@
 # CI
 
 The required pull-request gates are `fast`, `platforms`, `integration-s3`,
-and `publish-check`. The native matrix covers all five supported
+and `publish-check`. The native matrix covers portable crates on all five
 desktop/server platforms on every push and pull request, including forks.
-The stable `platforms` job requires all five matrix cells to pass.
+Unix cells additionally validate the POSIX file-descriptor FFI member. The
+stable `platforms` job requires all five matrix cells to pass.
 
 ## Jobs
 
 | Job              | When          | Role                                                                                            |
 | ---------------- | ------------- | ----------------------------------------------------------------------------------------------- |
 | `fast`           | every push/PR | digest-pinned Linux quality runner: format, lint, tests, version consistency, dependency policy |
-| `platform-smoke` | every push/PR | Linux x64/arm64, macOS arm64, and Windows x64/arm64 native clippy, tests, and release builds    |
+| `platform-smoke` | every push/PR | Five-host native clippy, tests, and release builds; Windows excludes the POSIX FFI member       |
 | `platforms`      | every push/PR | stable required aggregate that fails unless all five native matrix cells pass                   |
 | `integration-s3` | every push/PR | required S3 behavior against LocalStack                                                         |
 | `publish-check`  | every push/PR | required packaging and verification of every publishable workspace crate without publishing     |

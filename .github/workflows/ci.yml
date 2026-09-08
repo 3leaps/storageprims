@@ -1,8 +1,8 @@
 # storageprims CI
 #
 # Required checks: fast, platforms, integration-s3, publish-check.
-# The native matrix covers all five supported desktop/server platforms on
-# every push and pull request. `platforms` is its stable required aggregate.
+# The native matrix covers portable crates on all five desktop/server platforms
+# and the POSIX FFI crate on Unix. `platforms` is its stable required aggregate.
 name: CI
 on:
   push:
@@ -72,14 +72,19 @@ jobs:
         include:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            cargo_scope: --workspace
           - runner: ubuntu-latest-arm64-s
             target: aarch64-unknown-linux-gnu
+            cargo_scope: --workspace
           - runner: macos-15
             target: aarch64-apple-darwin
+            cargo_scope: --workspace
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
+            cargo_scope: --workspace --exclude storageprims-ffi
           - runner: windows-latest-arm64-s
             target: aarch64-pc-windows-msvc
+            cargo_scope: --workspace --exclude storageprims-ffi
     defaults:
       run:
         shell: bash
@@ -99,11 +104,11 @@ jobs:
           host=$(rustc -vV | awk '/^host:/{print $2}')
           test "$host" = "${{ matrix.target }}"
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy ${{ matrix.cargo_scope }} --all-targets --all-features --locked -- -D warnings
       - name: Test
-        run: cargo test --workspace --locked
+        run: cargo test ${{ matrix.cargo_scope }} --locked
       - name: Build release
-        run: cargo build --workspace --release --locked
+        run: cargo build ${{ matrix.cargo_scope }} --release --locked
   platforms:
     name: platforms
     if: always()
