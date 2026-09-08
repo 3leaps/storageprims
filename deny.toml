@@ -22,7 +22,15 @@ feature-depth = 1
 # Advisories (Security)
 # ============================================================================
 [advisories]
-ignore = []
+ignore = [
+    # Upstream AWS SDK: aws-smithy-http-client still ships hyper-rustls 0.24 /
+    # rustls 0.21 alongside the modern rustls 0.23 stack. Tracked upstream in
+    # smithy-rs; no fix available via dependency pin alone (verified at SDK 1.10.1).
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0258",
+]
 
 # ============================================================================
 # Licenses
@@ -37,6 +45,7 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
+    "OpenSSL",
     "Zlib",
     "0BSD",
     "Unlicense",

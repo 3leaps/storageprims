@@ -10,7 +10,8 @@
 #   make fmt        - Format code (cargo fmt + goneat format)
 #   make build      - Build all crates
 
-.PHONY: all help bootstrap bootstrap-force tools check test test-integration-s3 test-integration-ffi fmt fmt-check lint build clean version
+.PHONY: all help bootstrap bootstrap-foundation bootstrap-rust-tools bootstrap-force
+.PHONY: tools check test test-integration-s3 test-integration-ffi fmt fmt-check lint build clean version
 .PHONY: precommit prepush deny audit msrv
 .PHONY: build-release build-ffi cbindgen pr-final
 .PHONY: build-local-go build-local-ffi-shared go-test header-go
@@ -29,10 +30,11 @@ VERSION := $(shell tr -d ' \t\r\n' < $(VERSION_FILE) 2>/dev/null || echo dev)
 BIN_DIR := $(CURDIR)/bin
 
 # Pinned tool versions for reproducibility
-SFETCH_VERSION := latest
-GONEAT_VERSION ?= v0.5.1
+SFETCH_VERSION := v0.4.11
+GONEAT_VERSION ?= v0.6.0
 GONEAT_FORMAT_FAIL_ON ?= medium
 NEXTEST_VERSION ?= 0.9.128
+CARGO_EDIT_VERSION ?= 0.13.10
 
 # Tool paths
 # sfetch: repo-local (trust anchor) or PATH
@@ -45,7 +47,7 @@ CARGO_NEXTEST = $(shell command -v cargo-nextest 2>/dev/null)
 CARGO = cargo
 
 # MSRV (Minimum Supported Rust Version)
-MSRV = 1.89
+MSRV = 1.94.1
 
 # -----------------------------------------------------------------------------
 # Default and Help
@@ -110,6 +112,14 @@ help: ## Show available targets
 # NOTE: Rust toolchain (rustup/cargo) is a developer prerequisite, not bootstrapped.
 
 bootstrap: ## Install required tools (sfetch -> goneat)
+	@$(MAKE) bootstrap-foundation FORCE=$(FORCE)
+	@$(MAKE) bootstrap-rust-tools
+	@echo ""
+	@echo "[ok] Bootstrap complete"
+	@echo ""
+	@echo "Ensure $(BIN_DIR) is in your PATH, or tools will be found automatically."
+
+bootstrap-foundation:
 	@echo "Bootstrapping storageprims development environment..."
 	@echo ""
 	@# Step 0: Verify prerequisites
@@ -121,8 +131,15 @@ bootstrap: ## Install required tools (sfetch -> goneat)
 	@if ! command -v cargo >/dev/null 2>&1; then \
 		echo "[!!] cargo not found (required)"; \
 		echo ""; \
-		echo "Install Rust toolchain:"; \
+		echo "Install Rust toolchain (minimum 1.94.1):"; \
 		echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"; \
+		exit 1; \
+	fi
+	@RUST_VER=$$(rustc --version 2>/dev/null | sed -n 's/rustc \([0-9]*\.[0-9]*\).*/\1/p'); \
+	RUST_MIN="1.94.1"; \
+	if [ -z "$$RUST_VER" ] || [ "$$(printf '%s\n%s\n' "$$RUST_MIN" "$$RUST_VER" | sort -V | head -n1)" != "$$RUST_MIN" ]; then \
+		echo "[!!] Rust $$RUST_MIN+ required (found: $${RUST_VER:-unknown})"; \
+		echo "  rustup install 1.94.1 && rustup default 1.94.1"; \
 		exit 1; \
 	fi
 	@echo "[ok] cargo: $$(cargo --version)"
@@ -130,8 +147,21 @@ bootstrap: ## Install required tools (sfetch -> goneat)
 	@# Step 1: Install sfetch (trust anchor)
 	@mkdir -p "$(BIN_DIR)"
 	@if [ ! -x "$(BIN_DIR)/sfetch" ] && ! command -v sfetch >/dev/null 2>&1; then \
-		echo "[..] Installing sfetch (trust anchor)..."; \
-		curl -fsSL https://github.com/3leaps/sfetch/releases/download/$(SFETCH_VERSION)/install-sfetch.sh | bash -s -- --dest "$(BIN_DIR)"; \
+		echo "[..] Installing sfetch $(SFETCH_VERSION) (trust anchor)..."; \
+		if curl -fsSL "https://github.com/3leaps/sfetch/releases/latest/download/install-sfetch.sh" | bash -s -- --dir "$(BIN_DIR)" --tag $(SFETCH_VERSION) --yes --allow-checksum-only 2>/dev/null && [ -x "$(BIN_DIR)/sfetch" ]; then \
+			echo "[ok] sfetch installed via install-sfetch.sh"; \
+		else \
+			echo "[..] install-sfetch.sh unavailable; using direct tarball..."; \
+			SFETCH_ARCH=""; \
+			case "$$(uname -s)-$$(uname -m)" in \
+				Linux-x86_64|Linux-amd64) SFETCH_ARCH=linux_amd64 ;; \
+				Linux-aarch64|Linux-arm64) SFETCH_ARCH=linux_arm64 ;; \
+				Darwin-x86_64) SFETCH_ARCH=darwin_amd64 ;; \
+				Darwin-arm64) SFETCH_ARCH=darwin_arm64 ;; \
+				*) echo "[!!] Unsupported platform for sfetch bootstrap"; exit 1 ;; \
+			esac; \
+			curl -fsSL "https://github.com/3leaps/sfetch/releases/download/$(SFETCH_VERSION)/sfetch_$${SFETCH_ARCH}.tar.gz" | tar -xz -C "$(BIN_DIR)"; \
+		fi; \
 	else \
 		echo "[ok] sfetch already installed"; \
 	fi
@@ -148,7 +178,7 @@ bootstrap: ## Install required tools (sfetch -> goneat)
 	elif command -v sfetch >/dev/null 2>&1; then SFETCH_BIN="$$(command -v sfetch)"; fi; \
 	if [ "$(FORCE)" = "1" ] || ! command -v goneat >/dev/null 2>&1; then \
 		echo "[..] Installing goneat $(GONEAT_VERSION) via sfetch (user-space)..."; \
-		$$SFETCH_BIN --repo fulmenhq/goneat --tag $(GONEAT_VERSION); \
+		$$SFETCH_BIN --repo fulmenhq/goneat --tag $(GONEAT_VERSION) --install; \
 	else \
 		echo "[ok] goneat already installed"; \
 	fi
@@ -159,7 +189,9 @@ bootstrap: ## Install required tools (sfetch -> goneat)
 		echo "[!!] goneat installation failed"; exit 1; \
 	fi
 	@echo ""
-	@# Step 3: Install Rust tools via cargo (cargo-deny, cargo-audit, cargo-edit, cargo-nextest)
+
+bootstrap-rust-tools:
+	@# Install Rust tools via cargo (cargo-deny, cargo-audit, cargo-edit, cargo-nextest)
 	@echo "[..] Checking Rust dev tools..."
 	@if ! command -v cargo-deny >/dev/null 2>&1; then \
 		echo "[..] Installing cargo-deny..."; \
@@ -174,8 +206,8 @@ bootstrap: ## Install required tools (sfetch -> goneat)
 		echo "[ok] cargo-audit installed"; \
 	fi
 	@if ! cargo set-version -V >/dev/null 2>&1; then \
-		echo "[..] Installing cargo-edit..."; \
-		cargo install cargo-edit --locked; \
+		echo "[..] Installing cargo-edit $(CARGO_EDIT_VERSION)..."; \
+		cargo install cargo-edit --locked --version $(CARGO_EDIT_VERSION); \
 	else \
 		echo "[ok] cargo-edit installed"; \
 	fi
@@ -185,10 +217,6 @@ bootstrap: ## Install required tools (sfetch -> goneat)
 	else \
 		echo "[ok] cargo-nextest installed"; \
 	fi
-	@echo ""
-	@echo "[ok] Bootstrap complete"
-	@echo ""
-	@echo "Ensure $(BIN_DIR) is in your PATH, or tools will be found automatically."
 
 bootstrap-force: ## Force reinstall all tools
 	@$(MAKE) bootstrap FORCE=1

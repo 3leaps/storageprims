@@ -31,16 +31,17 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
-      - name: Install Rust 1.89.0
+      - name: Install Rust 1.94.1
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
-          toolchain: 1.89.0
+          toolchain: 1.94.1
           components: rustfmt, clippy
       - name: Verify runner and MSRV
         run: |
           set -euo pipefail
           test "$(id -u):$(id -g)" = "1001:1001"
-          rustc --version | grep '^rustc 1\.89\.0 '
+          rustc --version | grep '^rustc 1\.94\.1 '
+          goneat version | grep '^Module: v0\.6\.0$'
           for tool in goneat yamlfmt yamllint actionlint cargo-deny; do
             command -v "${tool}"
           done
@@ -87,10 +88,10 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
-      - name: Install Rust 1.89.0
+      - name: Install Rust 1.94.1
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
-          toolchain: 1.89.0
+          toolchain: 1.94.1
           components: clippy
       - name: Verify native host
         run: |
@@ -125,10 +126,10 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
-      - name: Install Rust 1.89.0
+      - name: Install Rust 1.94.1
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
-          toolchain: 1.89.0
+          toolchain: 1.94.1
       - name: Install cargo-nextest
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff  # v2.87.8
         with:
@@ -169,9 +170,9 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
-      - name: Install Rust 1.89.0
+      - name: Install Rust 1.94.1
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
-          toolchain: 1.89.0
+          toolchain: 1.94.1
       - name: Package workspace
         run: make release-check

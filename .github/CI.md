@@ -21,10 +21,10 @@ staged release, a command-line-only Cargo registry patch supplies the unpublishe
 core crate while verifying the dependent packages. The generated manifests are
 checked to retain the registry version and omit the local dependency path.
 
-All jobs use the workspace MSRV, Rust 1.89.0. The Linux quality job uses the
+All jobs use the workspace MSRV, Rust 1.94.1. The Linux quality job uses the
 digest-pinned Fulmen Toolbox goneat glibc runner with writable GitHub homes;
-the image's newer default Rust is not used as MSRV evidence. Windows commands
-use Bash. There are no cross-compiled, musl, or macOS Intel cells.
+the job asserts Rust 1.94.1 and Goneat v0.6.0 before running checks. Windows
+commands use Bash. There are no cross-compiled, musl, or macOS Intel cells.
 
 `.github/actionlint.yaml` declares the organization GitHub-hosted arm64 runner
 labels for linting; it does not deploy runners.
