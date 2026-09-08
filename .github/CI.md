@@ -13,7 +13,13 @@ The stable `platforms` job requires all five matrix cells to pass.
 | `platform-smoke` | every push/PR | Linux x64/arm64, macOS arm64, and Windows x64/arm64 native clippy, tests, and release builds    |
 | `platforms`      | every push/PR | stable required aggregate that fails unless all five native matrix cells pass                   |
 | `integration-s3` | every push/PR | required S3 behavior against LocalStack                                                         |
-| `publish-check`  | every push/PR | required packaging and verification of every workspace crate without publishing                 |
+| `publish-check`  | every push/PR | required packaging and verification of every publishable workspace crate without publishing     |
+
+The publish check creates and verifies the `storageprims-core`, `storageprims-ops`,
+and `storageprims-s3` archives in an isolated target directory. For the initial
+staged release, a command-line-only Cargo registry patch supplies the unpublished
+core crate while verifying the dependent packages. The generated manifests are
+checked to retain the registry version and omit the local dependency path.
 
 All jobs use the workspace MSRV, Rust 1.89.0. The Linux quality job uses the
 digest-pinned Fulmen Toolbox goneat glibc runner with writable GitHub homes;

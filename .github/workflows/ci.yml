@@ -174,4 +174,4 @@ jobs:
         with:
           toolchain: 1.89.0
       - name: Package workspace
-        run: cargo package --workspace
+        run: make release-check

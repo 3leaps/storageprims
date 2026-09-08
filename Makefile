@@ -524,7 +524,7 @@ version-check: ## Validate version consistency across files
 
 release-check: version-check ## Version consistency + package check (does not publish)
 	@echo "Packaging workspace crates (does not cargo publish)..."
-	@$(CARGO) package --workspace
+	@./scripts/check-packages.sh
 	@echo "[ok] Package check passed; cargo publish was not run"
 
 release-preflight: ## Verify clean-tree pre-tag requirements
