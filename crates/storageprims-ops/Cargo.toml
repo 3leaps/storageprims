@@ -1,11 +1,16 @@
 [package]
 name = "storageprims-ops"
+description = "Line-oriented operations built on storageprims providers"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 authors.workspace = true
+documentation = "https://docs.rs/storageprims-ops"
+readme = "README.md"
+publish = true
 
 [dependencies]
 storageprims-core.workspace = true

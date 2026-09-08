@@ -1,11 +1,16 @@
 [package]
 name = "storageprims-s3"
+description = "AWS S3 and S3-compatible provider for storageprims"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 authors.workspace = true
+documentation = "https://docs.rs/storageprims-s3"
+readme = "README.md"
+publish = true
 
 [features]
 integration = []

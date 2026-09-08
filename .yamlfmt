@@ -1,15 +1,12 @@
-# yamlfmt configuration for storageprims
-# Aligned with FulmenHQ org standards
-
 formatter:
   type: basic
   indent: 2
   line_ending: lf
 
-# Exclude patterns
 exclude:
   - node_modules/**
   - vendor/**
-  - .git/**
+  - .git
   - dist/**
+  - bin/**
   - target/**

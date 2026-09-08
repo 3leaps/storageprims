@@ -18,13 +18,15 @@ edition = "2021"
 rust-version = "1.94.1"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/3leaps/storageprims"
+homepage = "https://github.com/3leaps/storageprims"
 authors = ["3leaps Architecture Council"]
+publish = false
 
 [workspace.dependencies]
-storageprims-core = { path = "crates/storageprims-core" }
-storageprims-ops = { path = "crates/storageprims-ops" }
-storageprims-s3 = { path = "crates/storageprims-s3" }
-storageprims-ffi = { path = "ffi/storageprims-ffi" }
+storageprims-core = { version = "0.1.0", path = "crates/storageprims-core" }
+storageprims-ops = { version = "0.1.0", path = "crates/storageprims-ops" }
+storageprims-s3 = { version = "0.1.0", path = "crates/storageprims-s3" }
+storageprims-ffi = { version = "0.1.0", path = "ffi/storageprims-ffi" }
 
 # Async Runtime
 tokio = { version = "1", features = ["full"] }

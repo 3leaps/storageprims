@@ -129,7 +129,8 @@ Provider follow-on work should use the reusable hardening checklist in [docs/pro
 - **License**: MIT OR Apache-2.0 (dual, permissive)
 - **License compliance**: `cargo deny` enforces no GPL/LGPL/AGPL dependencies
 - **Security audit**: `cargo audit` for known vulnerabilities
-- **MSRV**: 1.94.1
+- **MSRV**: 1.94.1. The MSRV follows the minimum required by the pinned AWS SDK
+  and tooling line and may be higher than some sibling crates.
 
 ## License
 

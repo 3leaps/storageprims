@@ -5,7 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 authors.workspace = true
+publish.workspace = true
 description = "C-ABI exports for storageprims"
 
 [lib]
