@@ -29,3 +29,17 @@ commands use Bash. There are no cross-compiled, musl, or macOS Intel cells.
 
 `.github/actionlint.yaml` declares the organization GitHub-hosted arm64 runner
 labels for linting; it does not deploy runners.
+
+## Release workflow
+
+An annotated stable-version tag starts the separate `Release` workflow. It
+fails unless the peeled tag commit is exactly fetched `origin/main`, packages
+the Unix FFI library and header on Linux x86_64, Linux arm64, and macOS arm64,
+and generates a CycloneDX SBOM with a digest-pinned Syft image. The workflow
+asserts the exact asset inventory before opening a draft GitHub release.
+
+The release workflow has repository-wide `contents: read`; only its final
+draft-creation job receives `contents: write`. Every checkout disables persisted
+credentials, every action is commit-pinned, and CI has no signing-key inputs.
+Checksum generation, signing, verification, and the final explicit asset upload
+run later on the maintainer workstation.

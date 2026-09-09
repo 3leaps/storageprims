@@ -10,13 +10,18 @@
 #   make fmt        - Format code (cargo fmt + goneat format)
 #   make build      - Build all crates
 
+.NOTPARALLEL: release
+
 .PHONY: all help bootstrap bootstrap-foundation bootstrap-rust-tools bootstrap-force
 .PHONY: tools check test test-integration-s3 test-integration-ffi fmt fmt-check lint build clean version
-.PHONY: precommit prepush deny audit msrv
+.PHONY: precommit prepush deny audit dependency-scan msrv
 .PHONY: build-release build-ffi cbindgen pr-final
-.PHONY: build-local-go build-local-ffi-shared go-test header-go
+.PHONY: install uninstall install-test
 .PHONY: version-patch version-minor version-major version-set version-sync version-check
-.PHONY: release-check release-preflight
+.PHONY: release-check release-preflight release-tooling-test release-guard-tag-version
+.PHONY: release-clean release-download release-notes release-checksums release-sign
+.PHONY: release-export-keys release-verify-checksums release-verify-signatures
+.PHONY: release-verify-keys release-verify release-upload release
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -35,6 +40,11 @@ GONEAT_VERSION ?= v0.6.0
 GONEAT_FORMAT_FAIL_ON ?= medium
 NEXTEST_VERSION ?= 0.9.128
 CARGO_EDIT_VERSION ?= 0.13.10
+CBINDGEN_VERSION ?= 0.29.2
+
+RELEASE_DIR := $(CURDIR)/dist/release
+INSTALL_LIBDIR ?= $(HOME)/.local/lib
+INSTALL_INCLUDEDIR ?= $(HOME)/.local/include
 
 # Tool paths
 # sfetch: repo-local (trust anchor) or PATH
@@ -57,7 +67,7 @@ all: check
 
 help: ## Show available targets
 	@echo "storageprims - Cloud Storage Primitives"
-	@echo "Uniform cloud storage access across S3, GCS, Azure, and local filesystem."
+	@echo "Provider-neutral storage contracts with S3 and a Unix/POSIX C ABI."
 	@echo ""
 	@echo "Development:"
 	@echo "  help            Show this help message"
@@ -65,13 +75,9 @@ help: ## Show available targets
 	@echo "  build           Build all crates (debug)"
 	@echo "  build-release   Build all crates (release)"
 	@echo "  build-ffi       Build FFI library with C header"
+	@echo "  install         Build and install Unix FFI libraries and header"
+	@echo "  uninstall       Remove installed Unix FFI libraries and header"
 	@echo "  clean           Remove build artifacts"
-	@echo ""
-	@echo "Go bindings:"
-	@echo "  build-local-go      Build FFI for local Go development"
-	@echo "  build-local-ffi-shared  Build shared FFI for local consumers"
-	@echo "  go-test             Run Go binding tests"
-	@echo "  header-go           Generate C header for Go bindings"
 	@echo ""
 	@echo "Quality gates:"
 	@echo "  check           Run all quality checks (fmt, lint, test, deny)"
@@ -85,6 +91,7 @@ help: ## Show available targets
 	@echo "  pr-final        Final PR gate (fmt, header, checks, and integration lanes)"
 	@echo "  deny            Run cargo-deny license and advisory checks"
 	@echo "  audit           Run cargo-audit security scan"
+	@echo "  dependency-scan Run Goneat license, cooling, and vulnerability checks"
 	@echo "  msrv            Verify build with MSRV (Rust $(MSRV))"
 	@echo ""
 	@echo "Version management:"
@@ -97,6 +104,7 @@ help: ## Show available targets
 	@echo "  version-sync    Sync VERSION to Cargo.toml"
 	@echo "  release-check   Validate versions and package the workspace"
 	@echo "  release-preflight Verify clean-tree pre-tag requirements"
+	@echo "  release         Run the local signed-release ceremony"
 	@echo ""
 	@echo "Current version: $(VERSION)"
 
@@ -191,7 +199,7 @@ bootstrap-foundation:
 	@echo ""
 
 bootstrap-rust-tools:
-	@# Install Rust tools via cargo (cargo-deny, cargo-audit, cargo-edit, cargo-nextest)
+	@# Install Rust tools used by gates and FFI packaging.
 	@echo "[..] Checking Rust dev tools..."
 	@if ! command -v cargo-deny >/dev/null 2>&1; then \
 		echo "[..] Installing cargo-deny..."; \
@@ -216,6 +224,12 @@ bootstrap-rust-tools:
 		cargo install cargo-nextest --locked --version $(NEXTEST_VERSION); \
 	else \
 		echo "[ok] cargo-nextest installed"; \
+	fi
+	@if ! command -v cbindgen >/dev/null 2>&1; then \
+		echo "[..] Installing cbindgen $(CBINDGEN_VERSION)..."; \
+		cargo install cbindgen --locked --version $(CBINDGEN_VERSION); \
+	else \
+		echo "[ok] cbindgen installed"; \
 	fi
 
 bootstrap-force: ## Force reinstall all tools
@@ -264,6 +278,12 @@ tools: ## Verify external tools are available
 		echo "[ok] cargo-nextest: $$(cargo nextest --version)"; \
 	else \
 		echo "[!!] cargo-nextest not found (cargo install cargo-nextest --locked --version $(NEXTEST_VERSION))"; \
+	fi
+	@# Check cbindgen
+	@if command -v cbindgen >/dev/null 2>&1; then \
+		echo "[ok] cbindgen: $$(cbindgen --version)"; \
+	else \
+		echo "[!!] cbindgen not found (run 'make bootstrap')"; \
 	fi
 	@# Check sfetch
 	@if [ -x "$(BIN_DIR)/sfetch" ]; then \
@@ -382,10 +402,13 @@ msrv: ## Verify build with Minimum Supported Rust Version
 precommit: fmt lint ## Pre-commit checks (fast: fmt, clippy)
 	@echo "[ok] Pre-commit checks passed"
 
-prepush: fmt-check lint test deny version-check ## Pre-push checks (thorough)
+dependency-scan: ## Run Goneat dependency policy and vulnerability checks
+	@./scripts/check-dependencies.sh
+
+prepush: fmt-check lint test deny dependency-scan version-check release-tooling-test ## Pre-push checks (thorough)
 	@echo "[ok] Pre-push checks passed"
 
-pr-final: fmt cbindgen fmt-check lint test deny version-check test-integration-s3 test-integration-ffi ## Final PR gate before push/PR update
+pr-final: fmt cbindgen prepush test-integration-s3 test-integration-ffi ## Final PR gate before push/PR update
 	@echo "[ok] PR final checks passed"
 
 # -----------------------------------------------------------------------------
@@ -406,7 +429,7 @@ build-ffi: cbindgen ## Build FFI library with C header
 	@echo "Building FFI library..."
 	$(CARGO) build --package storageprims-ffi --release
 	@echo "[ok] FFI build complete"
-	@echo "Library: target/release/libstorageprims.*"
+	@echo "Library: target/release/libstorageprims_ffi.*"
 	@echo "Header: ffi/storageprims-ffi/storageprims.h"
 
 cbindgen: ## Generate C header from FFI crate
@@ -426,63 +449,21 @@ clean: ## Remove build artifacts
 	@echo "[ok] Clean complete"
 
 # -----------------------------------------------------------------------------
-# Go Bindings (placeholder — activate when ffi/bindings land)
+# Local Unix FFI install
 # -----------------------------------------------------------------------------
 
-GO_BINDINGS_DIR := bindings/go/storageprims
-GO_LIB_ROOT := $(GO_BINDINGS_DIR)/lib
+install: build-ffi ## Install Unix FFI libraries and header to user space
+	@./scripts/install-ffi.sh install "$(CURDIR)/target/release" \
+		"$(CURDIR)/ffi/storageprims-ffi/storageprims.h" \
+		"$(INSTALL_LIBDIR)" "$(INSTALL_INCLUDEDIR)"
 
-# Detect current platform
-UNAME_S := $(shell uname -s | tr '[:upper:]' '[:lower:]')
-UNAME_M := $(shell uname -m)
+uninstall: ## Remove installed Unix FFI libraries and header
+	@./scripts/install-ffi.sh uninstall "$(CURDIR)/target/release" \
+		"$(CURDIR)/ffi/storageprims-ffi/storageprims.h" \
+		"$(INSTALL_LIBDIR)" "$(INSTALL_INCLUDEDIR)"
 
-# Normalize architecture names for Go
-ifeq ($(UNAME_M),x86_64)
-    GO_ARCH := amd64
-endif
-ifeq ($(UNAME_M),aarch64)
-    GO_ARCH := arm64
-endif
-ifeq ($(UNAME_M),arm64)
-    GO_ARCH := arm64
-endif
-
-# Normalize OS names
-ifeq ($(UNAME_S),darwin)
-    GO_OS := darwin
-    GO_LIB_EXT := .a
-    GO_SHARED_EXT := .dylib
-    GO_LIB_PREFIX := lib
-endif
-ifeq ($(UNAME_S),linux)
-    GO_OS := linux
-    GO_LIB_EXT := .a
-    GO_SHARED_EXT := .so
-    GO_LIB_PREFIX := lib
-endif
-
-build-local-go: ## Build FFI for local Go development
-	@echo "Building FFI static library for local Go development..."
-	$(CARGO) build --package storageprims-ffi --release
-	@mkdir -p $(GO_LIB_ROOT)/local/$(GO_OS)-$(GO_ARCH)
-	@cp target/release/$(GO_LIB_PREFIX)storageprims$(GO_LIB_EXT) \
-		$(GO_LIB_ROOT)/local/$(GO_OS)-$(GO_ARCH)/
-	@echo "[ok] Static library copied to $(GO_LIB_ROOT)/local/$(GO_OS)-$(GO_ARCH)/"
-
-build-local-ffi-shared: ## Build shared FFI library for local consumers
-	@echo "Building FFI shared library..."
-	$(CARGO) build --package storageprims-ffi --release
-	@echo "[ok] Shared library: target/release/$(GO_LIB_PREFIX)storageprims$(GO_SHARED_EXT)"
-
-go-test: ## Run Go binding tests
-	@echo "Running Go binding tests..."
-	@cd $(GO_BINDINGS_DIR) && go test ./... -v
-	@echo "[ok] Go tests passed"
-
-header-go: cbindgen ## Generate C header for Go bindings
-	@mkdir -p $(GO_BINDINGS_DIR)/include
-	@cp ffi/storageprims-ffi/storageprims.h $(GO_BINDINGS_DIR)/include/
-	@echo "[ok] Header copied to $(GO_BINDINGS_DIR)/include/storageprims.h"
+install-test: ## Test unlink-first install and bounded uninstall in a temp prefix
+	@./scripts/release-safety.test.sh
 
 # -----------------------------------------------------------------------------
 # Version Management
@@ -555,6 +536,14 @@ release-check: version-check ## Version consistency + package check (does not pu
 	@./scripts/check-packages.sh
 	@echo "[ok] Package check passed; cargo publish was not run"
 
+release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
+	@./scripts/release-guard-tag-version.test.sh
+	@./scripts/release-assets.test.sh
+	@./scripts/release-github-state.test.sh
+	@./scripts/release-safety.test.sh
+	@./scripts/release-negative-controls.test.sh
+	@echo "[ok] Release tooling tests passed"
+
 release-preflight: ## Verify clean-tree pre-tag requirements
 	@echo "Running release preflight checks..."
 	@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
@@ -562,6 +551,73 @@ release-preflight: ## Verify clean-tree pre-tag requirements
 		git status --short; \
 		exit 1; \
 	fi
-	@$(MAKE) prepush --silent
+	@$(MAKE) pr-final --silent
 	@$(MAKE) version-check --silent
+	@grep -Eq "^## v$(VERSION) — [0-9]{4}-[0-9]{2}-[0-9]{2}$$" RELEASE_NOTES.md || \
+		{ echo "[!!] RELEASE_NOTES.md lacks the exact v$(VERSION) heading"; exit 1; }
+	@test -f "docs/releases/v$(VERSION).md" || \
+		{ echo "[!!] Per-cut release notes are missing"; exit 1; }
+	@./scripts/check-release-notes.sh "v$(VERSION)"
+	@git fetch origin main
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" || \
+		{ echo "[!!] HEAD must equal fetched origin/main"; exit 1; }
+	@test "$$(git rev-list --count HEAD..origin/main)" = 0
+	@test "$$(git rev-list --count origin/main..HEAD)" = 0
+	@test -z "$$(git status --porcelain)" || \
+		{ echo "[!!] Preflight gates changed the working tree"; exit 1; }
 	@echo "[ok] All preflight checks passed - ready to tag v$(VERSION)"
+
+release-guard-tag-version: ## Validate the canonical release tag
+	@./scripts/release-guard-tag-version.sh
+
+release-clean: ## Safely empty the repository release staging directory
+	@./scripts/release-clean.sh "$(RELEASE_DIR)"
+
+release-download: ## Download exact unsigned assets from the trusted draft
+	@./scripts/download-release-assets.sh "$(RELEASE_DIR)"
+
+release-notes: ## Add the exact per-cut notes to the signable asset set
+	@STORAGEPRIMS_REQUIRE_TAG=1 ./scripts/release-guard-tag-version.sh >/dev/null
+	@test -f "docs/releases/$${STORAGEPRIMS_RELEASE_TAG}.md" || \
+		{ echo "[!!] Exact per-cut release notes are missing"; exit 1; }
+	@./scripts/validate-release-assets.sh "$(RELEASE_DIR)" base >/dev/null
+	@cp "docs/releases/$${STORAGEPRIMS_RELEASE_TAG}.md" \
+		"$(RELEASE_DIR)/release-notes-$${STORAGEPRIMS_RELEASE_TAG}.md"
+	@./scripts/validate-release-assets.sh "$(RELEASE_DIR)" signable >/dev/null
+	@echo "[ok] Per-cut release notes added to the signed set"
+
+release-checksums: ## Generate exact SHA256 and SHA512 manifests
+	@./scripts/generate-checksums.sh "$(RELEASE_DIR)"
+
+release-sign: ## Sign checksum manifests with local MFA-held keys
+	@./scripts/sign-release-assets.sh "$(RELEASE_DIR)"
+
+release-export-keys: ## Export and prove public verification material
+	@./scripts/export-release-keys.sh "$(RELEASE_DIR)"
+
+release-verify-checksums: ## Verify exact dual checksum manifests
+	@./scripts/verify-checksums.sh "$(RELEASE_DIR)"
+
+release-verify-signatures: ## Verify every configured signature
+	@./scripts/verify-signatures.sh "$(RELEASE_DIR)"
+
+release-verify-keys: ## Verify exported material contains public keys only
+	@./scripts/verify-public-keys.sh "$(RELEASE_DIR)"
+
+release-verify: release-verify-checksums release-verify-signatures release-verify-keys ## Verify signed release set
+	@./scripts/validate-release-assets.sh "$(RELEASE_DIR)" signed >/dev/null
+	@echo "[ok] Signed release set verified"
+
+release-upload: ## Verify once and update the exact trusted draft release
+	@./scripts/upload-release-assets.sh "$(RELEASE_DIR)"
+
+release: release-guard-tag-version ## Run the serialized local signing ceremony
+	@STORAGEPRIMS_REQUIRE_TAG=1 ./scripts/release-guard-tag-version.sh >/dev/null
+	@$(MAKE) release-clean
+	@$(MAKE) release-download
+	@$(MAKE) release-notes
+	@$(MAKE) release-checksums
+	@$(MAKE) release-sign
+	@$(MAKE) release-export-keys
+	@$(MAKE) release-upload
+	@echo "[ok] Release assets signed and uploaded; GitHub release remains draft"

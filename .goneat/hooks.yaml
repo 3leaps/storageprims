@@ -5,18 +5,18 @@ hooks:
       args:
         - "--check"
         - "--categories"
-        - "format,lint,typecheck,dependencies"
+        - "format,lint,typecheck"
         - "--fail-on"
         - "critical"
         - "--lint-new-from-rev"
         - "HEAD~"
       priority: 10
-      timeout: "90s"
+      timeout: "5m"
   pre-push:
     - command: "assess"
-      args: ["--check", "--categories", "format,lint,typecheck,security,dependencies,repo-status", "--fail-on", "high"]
+      args: ["--check", "--categories", "format,lint,typecheck,security,repo-status", "--fail-on", "high"]
       priority: 10
-      timeout: "2m"
+      timeout: "5m"
 optimization:
   cache_results: true
   content_source: working

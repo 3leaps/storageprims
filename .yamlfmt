@@ -1,6 +1,7 @@
 formatter:
   type: basic
   indent: 2
+  pad_line_comments: 2
   line_ending: lf
 
 exclude:

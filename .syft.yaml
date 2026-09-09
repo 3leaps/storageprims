@@ -1,0 +1,20 @@
+exclude:
+  - ./.cache
+  - ./.claude
+  - ./.git
+  - ./.goneat/hooks
+  - ./.plans
+  - ./.scratchpad
+  - ./bin
+  - ./bindings
+  - ./dist
+  - ./sbom
+  - ./target
+  - "**/.env"
+  - "**/.env.*"
+  - "**/*.key"
+  - "**/*.pem"
+  - "**/AGENTS.local.md"
+  - "**/credentials.json"
+  - "**/secrets.yaml"
+  - "**/secrets.yml"

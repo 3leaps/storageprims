@@ -1,7 +1,7 @@
 # storageprims
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
-[![Rust: 1.94+](https://img.shields.io/badge/Rust-1.94+-orange.svg)](https://www.rust-lang.org)
+[![Rust: 1.94.1](https://img.shields.io/badge/Rust-1.94.1-orange.svg)](https://www.rust-lang.org)
 
 **Provider-neutral Rust storage primitives with an implemented S3 backend and a
 Unix/POSIX C ABI.**
@@ -117,7 +117,7 @@ Structured provider and operation context in FFI errors remains planned.
 ## Development
 
 ```bash
-make bootstrap    # Install tools (sfetch -> goneat, cargo-deny, cargo-audit, cargo-nextest)
+make bootstrap    # Install tools, including cbindgen for the C ABI
 make check        # Run all quality checks (fmt, lint, test, deny)
 make build        # Build all crates
 make test         # Run tests
@@ -125,6 +125,32 @@ make test-integration-s3  # Run provider integration via cargo nextest
 ```
 
 Provider follow-on work should use the reusable hardening checklist in [docs/provider-hardening-checklist.md](docs/provider-hardening-checklist.md).
+
+## Releases
+
+The first release is distributed as signed GitHub assets and can be pinned
+directly from git. The Rust crates are not published on crates.io in this cut.
+
+```toml
+storageprims-core = { git = "https://github.com/3leaps/storageprims", tag = "v0.1.0" }
+storageprims-ops = { git = "https://github.com/3leaps/storageprims", tag = "v0.1.0" }
+storageprims-s3 = { git = "https://github.com/3leaps/storageprims", tag = "v0.1.0" }
+```
+
+Each GitHub release includes SHA-256 and SHA-512 manifests, minisign
+signatures, and the public verification key. After downloading one release's
+assets into an otherwise empty directory:
+
+```bash
+minisign -Vm SHA256SUMS -p storageprims-minisign.pub
+minisign -Vm SHA512SUMS -p storageprims-minisign.pub
+shasum -a 256 -c SHA256SUMS
+shasum -a 512 -c SHA512SUMS
+```
+
+Release history and operator-facing verification details are in
+[RELEASE_NOTES.md](RELEASE_NOTES.md) and
+[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 
 ## Quality Gates
 
