@@ -210,7 +210,8 @@ async fn s3_provider_honors_conditional_put_against_localstack() {
 
 #[tokio::test]
 async fn s3_provider_rejects_invalid_match_before_transport_without_disclosure() {
-    let sentinel = "\"sentinel\nmatch-token\"";
+    let sentinel = "sentinel-fragment";
+    let token = format!("\"{sentinel}\nmatch-token\"");
     let provider = S3Provider::from_config(ProviderConfig {
         provider: ProviderKind::S3,
         target: TargetConfig {
@@ -233,9 +234,7 @@ async fn s3_provider_rejects_invalid_match_before_transport_without_disclosure()
             boxed_reader("payload"),
             PutOptions {
                 content_length: Some(7),
-                precondition: PutPrecondition::Match {
-                    token: sentinel.to_string(),
-                },
+                precondition: PutPrecondition::Match { token },
                 ..PutOptions::default()
             },
         )

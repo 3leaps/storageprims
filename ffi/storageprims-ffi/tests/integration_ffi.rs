@@ -198,16 +198,15 @@ fn ffi_round_trips_conditional_put_and_conflict_kind_against_localstack() {
     assert_eq!(error["code"], "conflict");
     assert_eq!(error["kind"], "token_mismatch");
 
-    let sentinel = "\"sentinel\nmatch-token\"";
+    let sentinel = "sentinel-fragment";
+    let token = format!("\"{sentinel}\nmatch-token\"");
     let descriptor = begin_put(
         handle,
         provider_id,
         "conditional/invalid.txt",
         PutOptions {
             content_length: Some(7),
-            precondition: PutPrecondition::Match {
-                token: sentinel.to_string(),
-            },
+            precondition: PutPrecondition::Match { token },
             ..PutOptions::default()
         },
     );

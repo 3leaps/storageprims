@@ -8,7 +8,7 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
       - DEBUG=0
     healthcheck:
-      test: ["CMD", "bash", "-lc", "curl -fsS http://127.0.0.1:4566/_localstack/health | grep -q '\"s3\": \"available\"'"]
+      test: ["CMD", "bash", "-lc", "curl -fsS http://127.0.0.1:4566/_localstack/health | grep -Eq '\"s3\": \"(available|running)\"'"]
       interval: 5s
       timeout: 3s
       retries: 20
