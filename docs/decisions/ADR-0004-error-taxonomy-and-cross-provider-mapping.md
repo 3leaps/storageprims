@@ -147,6 +147,14 @@ to tell the difference between:
 - Some operation-specific error nuances will be refined by later DDRs.
 - Bindings may add convenience subclasses/wrappers as long as the canonical class remains visible.
 
+## Current Implementation
+
+The core taxonomy and S3 mappings implement the first provider slice. The
+Unix/POSIX FFI exposes coarse error codes and a last-error message, but does not
+yet expose the proposed structured provider and operation context. Validation
+across a second provider and a language binding is also outstanding, so this
+record remains `Proposed`.
+
 ## Decision Points
 
 This record should remain `Proposed` until:

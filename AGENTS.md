@@ -93,9 +93,16 @@ CI covers both platforms via GitHub Actions.
 
 ## Project Overview
 
-**storageprims** is a cross-language cloud storage primitives library implemented in Rust with first-class bindings for Go and TypeScript.
+**storageprims** is a cloud storage primitives library implemented in Rust and
+designed for future cross-language bindings.
 
-**Core differentiator**: One Rust implementation, consumed everywhere — uniform interface across S3, GCS, Azure Blob, and local filesystem.
+The current implementation provides Rust core and operations crates, an S3
+provider, and a Unix/POSIX C ABI. GCS, Azure Blob, local filesystem, CLI, Go,
+and TypeScript surfaces are planned.
+
+**Design direction**: One Rust implementation behind provider-neutral
+contracts, with cross-language bindings added only when their public surfaces
+are implemented.
 
 **Key principle**: Reliable cloud storage access without reimplementation per tool or language.
 
@@ -241,28 +248,28 @@ FFI boundary changes require extra scrutiny:
 
 ### Provider Parity
 
-Changes must maintain uniform behavior across providers:
+Each implemented provider that claims general storageprims conformance must
+maintain uniform behavior:
 
 - Same error types regardless of provider
 - Same trait surface for all providers
 - Provider-specific behavior documented explicitly
-- Integration tests cover all providers for each operation
+- Integration tests cover each implemented provider for every operation it exposes
 
 ## Key Files
 
-| Path                         | Purpose                                              |
-| ---------------------------- | ---------------------------------------------------- |
-| `crates/storageprims-core/`  | Core traits, error types, URI parsing, provider enum |
-| `crates/storageprims-s3/`    | AWS S3 implementation                                |
-| `crates/storageprims-gcs/`   | Google Cloud Storage implementation                  |
-| `crates/storageprims-azb/`   | Azure Blob Storage implementation                    |
-| `crates/storageprims-local/` | Local filesystem provider                            |
-| `crates/storageprims-cli/`   | Diagnostic CLI                                       |
-| `ffi/storageprims-ffi/`      | C-ABI exports, runtime management                    |
-| `bindings/`                  | Go, TypeScript wrappers                              |
-| `docs/decisions/`            | Decision Records (ADR, DDR, SDR)                     |
-| `config/agentic/roles/`      | Role catalog (YAML prompt definitions)               |
-| `deny.toml`                  | License and security policy                          |
+| Path                        | Purpose                                              |
+| --------------------------- | ---------------------------------------------------- |
+| `crates/storageprims-core/` | Core traits, error types, URI parsing, provider enum |
+| `crates/storageprims-s3/`   | AWS S3 implementation                                |
+| `crates/storageprims-ops/`  | Provider-neutral line-oriented operations            |
+| `ffi/storageprims-ffi/`     | C-ABI exports, runtime management                    |
+| `docs/decisions/`           | Decision Records (ADR, DDR, SDR)                     |
+| `config/agentic/roles/`     | Role catalog (YAML prompt definitions)               |
+| `deny.toml`                 | License and security policy                          |
+
+GCS, Azure Blob, local filesystem, CLI, Go, and TypeScript surfaces are
+planned; their working crates and bindings are not present.
 
 ## Standards Reference
 

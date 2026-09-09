@@ -146,6 +146,14 @@ Applications may use those tools to prepare env vars, files, or inline payloads 
 - control-plane request logging should be reviewed for auth payload redaction
 - docs should mark supported channels as recommended vs risky
 
+### Current partial conformance
+
+The implemented S3 and FFI paths minimize credential-related debug and error
+detail, report only the credential-source class in diagnostics, and test that
+secret material and selectors are not disclosed. Explicit in-memory delivery
+remains a caller-risk channel. CLI and language-binding channel validation is
+not yet available, so this record remains `Proposed`.
+
 ## Risk Assessment
 
 ### Residual Risk

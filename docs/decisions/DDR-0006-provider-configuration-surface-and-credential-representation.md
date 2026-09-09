@@ -206,10 +206,14 @@ That would blur the line between storage access and secrets management, and woul
 - Provider implementations must reject represented credential modes they do not support during
   construction, before filesystem or provider I/O. The S3 provider currently rejects
   `credentials_file` as `InvalidArgument` on `credentials.mode`.
+- The S3 provider implements the default chain and profile selector, plus explicit in-memory
+  credential and environment-based modes for process-isolated callers. The in-memory modes are
+  caller-risk channels rather than the recommended happy path.
 - Explicit env-map delivery should be designed with redaction and bounded scope in mind.
 - Documentation should distinguish "recommended" auth modes from merely "supported" ones.
 - Diagnostic and probe results expose only the credential-source class, never profile names,
   credential-file paths, environment-variable names, or inline map contents.
+- CLI and language-binding validation remains outstanding, so this record remains `Proposed`.
 
 ## Decision Points
 

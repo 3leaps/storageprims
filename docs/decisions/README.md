@@ -24,6 +24,17 @@ storageprims.
 - **DDR**: API design, normalization rules, pagination semantics, capability modeling, and implementation-shaping choices
 - **SDR**: Credential boundaries, redaction, safe defaults, and stream/temporary-resource hardening
 
+## Current Implementation Snapshot
+
+| Area                | Current state                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Providers           | S3 and S3-compatible storage implemented; GCS, Azure Blob, and local filesystem planned                        |
+| Rust workspace      | Core contracts, line-oriented operations, and S3 provider implemented                                          |
+| FFI                 | C ABI implemented on Unix/POSIX; Windows FFI planned                                                           |
+| Bindings and CLI    | Go, TypeScript, and CLI planned                                                                                |
+| Optional operations | Conditional put implemented; delimiter listing and multipart upload planned                                    |
+| Error detail        | Canonical classes and coarse FFI codes/messages implemented; structured FFI provider/operation context planned |
+
 ## Near-Term Activity Map
 
 This section tracks current and planned decision records, subject to use-case review.
@@ -35,7 +46,7 @@ as files.
 
 - `gonimbus`: very large-bucket indexing and prefix-scoped listing; pushes storageprims toward strong pagination, delimiter-listing, and partial-failure semantics
 - `fulseed`: deterministic object-store workflows; pushes storageprims toward a boring, dependency-light CRUD contract with stable auth/config behavior
-- `datarakt`: Go-first transfer, inspection, and batch access; makes Go bindings and streaming design immediate priorities
+- `datarakt`: Go-first transfer, inspection, and batch access; makes the planned Go bindings and streaming design immediate priorities
 - `lanyte`: native Rust plus future IPC-wrapped storage access; reinforces mechanism/policy separation and clean primitive boundaries
 
 Working planning companion:
@@ -120,7 +131,7 @@ Working planning companion:
 
 ## Sequencing Guidance
 
-Before S3 and Go bindings move much further, storageprims should have at least:
+Before another provider or language binding is added, storageprims should have at least:
 
 1. ADR-0001
 2. ADR-0003

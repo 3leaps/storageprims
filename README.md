@@ -3,7 +3,8 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust: 1.94+](https://img.shields.io/badge/Rust-1.94+-orange.svg)](https://www.rust-lang.org)
 
-**Uniform, cross-language cloud storage primitives — one Rust implementation, consumed everywhere.**
+**Provider-neutral Rust storage primitives with an implemented S3 backend and a
+Unix/POSIX C ABI.**
 
 ## The Problem
 
@@ -11,7 +12,10 @@ Cloud storage access is reimplemented independently across multiple repositories
 
 ## The Solution
 
-storageprims provides a uniform interface for cloud object storage operations, implemented once in Rust and consumed via native crate dependencies or cross-language bindings (Go, TypeScript).
+storageprims provides a uniform Rust interface for cloud object storage
+operations. The current workspace implements the core contracts, reusable
+line-oriented operations, an S3 backend, and a Unix/POSIX C ABI. Additional
+providers and language bindings are planned.
 
 Part of the **3leaps prims family**:
 
@@ -22,60 +26,63 @@ Part of the **3leaps prims family**:
 | **docprims**     | Document handling                              |
 | **storageprims** | Cloud object storage                           |
 
-## Providers
+## Implementation Status
 
-| Provider                 | URI Scheme                     | Auth                                      |
-| ------------------------ | ------------------------------ | ----------------------------------------- |
-| AWS S3 (+ S3-compatible) | `s3://bucket/key`              | AWS SDK default chain, profiles, explicit |
-| Google Cloud Storage     | `gs://bucket/object`           | Application Default Credentials, SA keys  |
-| Azure Blob Storage       | `azb://account/container/blob` | DefaultAzureCredential, storage keys      |
-| Local filesystem         | `file:///path`                 | OS permissions                            |
-
-## Operations
-
-- **List** objects with prefix filtering and pagination
-- **Head** object metadata (size, ETag, content type, last modified)
-- **Get** object content — full download or byte-range requests
-- **Put** object content — streaming upload with metadata and provider-enforced create/match conditions
-- **Delete** objects
-- **Copy** objects within or across providers
-- **Multipart** uploads for large objects
+| Surface                                                     | Status                        |
+| ----------------------------------------------------------- | ----------------------------- |
+| Rust core contracts and line-oriented operations            | Implemented                   |
+| AWS S3 and S3-compatible provider                           | Implemented                   |
+| List, head, get, range get, put, delete, and S3-native copy | Implemented                   |
+| Provider-enforced conditional put                           | Implemented                   |
+| Root-prefix containment for listing and object operations   | Implemented                   |
+| C ABI control JSON and descriptor/pipe streaming            | Implemented on Unix/POSIX     |
+| Portable Rust crates on Windows                             | Implemented and native-tested |
+| Windows C ABI                                               | Planned                       |
+| Go and TypeScript bindings                                  | Planned                       |
+| GCS, Azure Blob, local filesystem, and CLI crates           | Planned                       |
+| Multipart upload and delimiter/common-prefix listing        | Planned                       |
 
 ## Quick Start (Rust)
 
 ```rust
-use storageprims_core::{StorageProvider, StorageUri};
+use storageprims_core::{
+    CredentialSource, ListOptions, ProviderConfig, ProviderKind, StorageProvider, StorageUri,
+    TargetConfig,
+};
 use storageprims_s3::S3Provider;
 
 let uri = StorageUri::parse("s3://my-bucket/data/")?;
-let provider = S3Provider::from_uri(&uri, Default::default())?;
+let config = ProviderConfig {
+    provider: ProviderKind::S3,
+    target: TargetConfig::default(),
+    credentials: CredentialSource::DefaultChain,
+};
+let provider = S3Provider::from_uri(&uri, config).await?;
 
-// List objects
-let result = provider.list(ListOptions {
-    prefix: Some("data/"),
-    ..Default::default()
-}).await?;
-
-// Get object
-let response = provider.get("data/export.csv").await?;
+let result = provider.list(ListOptions::default()).await?;
+println!("{} objects", result.objects.len());
 ```
 
-## Quick Start (Go)
+The complete, compile-checked version is
+[`crates/storageprims-s3/examples/list.rs`](crates/storageprims-s3/examples/list.rs).
+It uses the AWS SDK default credential chain; no credentials are passed in
+arguments or source code.
 
-```go
-import "github.com/3leaps/storageprims/bindings/go/storageprims"
+### S3 authentication
 
-provider, err := storageprims.Open("s3://my-bucket/data/")
-defer provider.Close()
+The default credential chain is the recommended mode. A profile is also
+supported as a non-secret selector. Explicit in-memory credential and
+environment-based modes are supported for process-isolated callers, but are
+caller-risk channels and are not the default happy path. The S3 provider does
+not support credential-file configuration and rejects that mode during
+construction.
 
-// Control plane — metadata
-meta, err := provider.Head("data/export.csv")
-
-// Data plane — streaming via OS pipe
-reader, err := provider.GetStream("data/export.csv")
-defer reader.Close()
-// reader is an io.ReadCloser backed by an OS pipe — native Go I/O
-```
+Credential values, selectors, and environment details are omitted from normal
+diagnostics. See
+[DDR-0006](docs/decisions/DDR-0006-provider-configuration-surface-and-credential-representation.md)
+and
+[SDR-0001](docs/decisions/SDR-0001-credential-boundary-and-redaction-policy.md)
+for the proposed configuration and credential-safety model.
 
 ## Architecture
 
@@ -83,27 +90,29 @@ storageprims uses a layered workspace architecture:
 
 ```
 storageprims-core          Core traits, error types, URI parsing
-storageprims-s3            AWS S3 provider (aws-sdk-rust)
-storageprims-gcs           GCS provider (google-cloud-rust)
-storageprims-azb           Azure Blob provider (azure_storage_blobs)
-storageprims-local         Local filesystem provider
-storageprims-cli           Diagnostic CLI
-storageprims-ffi           C-ABI exports + runtime management
+        │
+        ├── storageprims-ops    Provider-neutral line operations
+        ├── storageprims-s3     AWS S3 and S3-compatible provider
+        └── storageprims-ffi    Unix/POSIX C ABI and runtime
 ```
 
 ### FFI Design
 
-- **Control plane** (metadata): JSON over FFI boundary (list, head, delete)
-- **Data plane** (streaming): OS pipes/file descriptors (get, put) — no FFI overhead for bulk data
+- **Control plane**: JSON strings for metadata operations and coarse error
+  codes with last-error messages
+- **Data plane**: bounded OS pipes/file descriptors for get, range get, and put
+
+Structured provider and operation context in FFI errors remains planned.
 
 ## Platform Support
 
-| Platform          | Target                    | Status  |
-| ----------------- | ------------------------- | ------- |
-| Linux x64 glibc   | x86_64-unknown-linux-gnu  | Planned |
-| Linux arm64 glibc | aarch64-unknown-linux-gnu | Planned |
-| macOS arm64       | aarch64-apple-darwin      | Planned |
-| Windows x64       | x86_64-pc-windows-msvc    | Planned |
+| Platform          | Target                    | Portable Rust crates | C ABI         |
+| ----------------- | ------------------------- | -------------------- | ------------- |
+| Linux x64 glibc   | x86_64-unknown-linux-gnu  | Native-tested        | Native-tested |
+| Linux arm64 glibc | aarch64-unknown-linux-gnu | Native-tested        | Native-tested |
+| macOS arm64       | aarch64-apple-darwin      | Native-tested        | Native-tested |
+| Windows x64       | x86_64-pc-windows-msvc    | Native-tested        | Planned       |
+| Windows arm64     | aarch64-pc-windows-msvc   | Native-tested        | Planned       |
 
 ## Development
 
@@ -136,8 +145,8 @@ Provider follow-on work should use the reusable hardening checklist in [docs/pro
 
 Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
 
 at your option.
 
