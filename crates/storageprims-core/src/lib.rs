@@ -7,10 +7,12 @@ pub mod types;
 pub mod uri;
 
 pub use config::{sanitize_endpoint, CredentialSource, ProviderConfig, TargetConfig};
-pub use error::{ProviderKind, Result, StorageError, StorageErrorCode, StorageOperation};
+pub use error::{
+    ConflictKind, ProviderKind, Result, StorageError, StorageErrorCode, StorageOperation,
+};
 pub use provider::{BoxFuture, BoxedByteStream, Capability, StorageProvider};
 pub use types::{
     CopyRequest, CopyResult, CopyStrategy, CredentialSourceKind, GetRangeRequest, ListOptions,
-    ListResult, ObjectMetadata, ObjectSummary, ProbeResult, PutOptions, PutResult,
+    ListResult, ObjectMetadata, ObjectSummary, ProbeResult, PutOptions, PutPrecondition, PutResult,
 };
 pub use uri::StorageUri;

@@ -1024,14 +1024,21 @@ mod tests {
             &self,
             key: &str,
             _body: BoxedByteStream,
-            _options: PutOptions,
+            options: PutOptions,
         ) -> BoxFuture<'_, PutResult> {
             let key = key.to_string();
             Box::pin(async move {
+                if !options.precondition.is_none() {
+                    return Err(StorageError::UnsupportedCapability {
+                        provider: ProviderKind::Local,
+                        operation: StorageOperation::Put,
+                        capability: storageprims_core::Capability::ConditionalPut,
+                    });
+                }
                 Ok(PutResult {
                     path: key,
                     etag: None,
-                    size: None,
+                    size: options.content_length,
                 })
             })
         }

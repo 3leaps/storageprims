@@ -11,7 +11,7 @@ use aws_sdk_s3::Client;
 use serde::Deserialize;
 use storageprims_core::{
     CopyRequest, CredentialSource, CredentialSourceKind, ListOptions, ProbeResult, ProviderConfig,
-    ProviderKind, PutOptions, TargetConfig,
+    ProviderKind, PutOptions, PutPrecondition, TargetConfig,
 };
 use storageprims_ffi::{
     storageprims_clear_error, storageprims_copy, storageprims_count_lines, storageprims_delete,
@@ -41,6 +41,8 @@ struct DeleteResult {
 #[derive(Debug, Deserialize)]
 struct PutResult {
     path: String,
+    etag: Option<String>,
+    size: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,6 +124,106 @@ fn ffi_round_trips_control_and_data_plane_against_localstack() {
         unsafe { storageprims_delete(handle, provider_id, key.as_ptr(), out) }
     });
     assert!(deleted.deleted);
+
+    assert_eq!(
+        storageprims_provider_destroy(handle, provider_id),
+        StorageprimsErrorCode::Ok
+    );
+    assert_eq!(storageprims_shutdown(handle), StorageprimsErrorCode::Ok);
+}
+
+#[test]
+fn ffi_round_trips_conditional_put_and_conflict_kind_against_localstack() {
+    let endpoint = endpoint();
+    let bucket = format!("storageprims-ffi-it-{}", unique_suffix());
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+    runtime.block_on(create_bucket(&endpoint, &bucket));
+
+    let handle = storageprims_init();
+    assert!(handle > 0);
+    let provider_id = create_provider(handle, &bucket, &endpoint);
+
+    let created = put_object_with_options(
+        handle,
+        provider_id,
+        "conditional/data.txt",
+        b"first",
+        PutOptions {
+            content_length: Some(5),
+            precondition: PutPrecondition::MustNotExist,
+            ..PutOptions::default()
+        },
+    );
+    assert_eq!(created.size, Some(5));
+    let etag = created.etag.expect("put result should carry an ETag");
+
+    let replaced = put_object_with_options(
+        handle,
+        provider_id,
+        "conditional/data.txt",
+        b"replacement",
+        PutOptions {
+            content_length: Some(11),
+            precondition: PutPrecondition::Match { token: etag },
+            ..PutOptions::default()
+        },
+    );
+    assert_eq!(replaced.size, Some(11));
+
+    let descriptor = begin_put(
+        handle,
+        provider_id,
+        "conditional/data.txt",
+        PutOptions {
+            content_length: Some(8),
+            precondition: PutPrecondition::Match {
+                token: "\"not-the-current-etag\"".to_string(),
+            },
+            ..PutOptions::default()
+        },
+    );
+    write_put_body(&descriptor, b"rejected");
+    let mut out_json = std::ptr::null_mut();
+    let code = unsafe {
+        storageprims_put_finalize(
+            handle,
+            descriptor.stream_id.expect("put stream id"),
+            &mut out_json,
+        )
+    };
+    assert_eq!(code, StorageprimsErrorCode::Conflict);
+    assert!(out_json.is_null());
+    let error: serde_json::Value =
+        serde_json::from_str(&last_error_detail()).expect("last error should be JSON");
+    assert_eq!(error["code"], "conflict");
+    assert_eq!(error["kind"], "token_mismatch");
+
+    let sentinel = "\"sentinel\nmatch-token\"";
+    let descriptor = begin_put(
+        handle,
+        provider_id,
+        "conditional/invalid.txt",
+        PutOptions {
+            content_length: Some(7),
+            precondition: PutPrecondition::Match {
+                token: sentinel.to_string(),
+            },
+            ..PutOptions::default()
+        },
+    );
+    write_put_body(&descriptor, b"payload");
+    let mut out_json = std::ptr::null_mut();
+    let code = unsafe {
+        storageprims_put_finalize(
+            handle,
+            descriptor.stream_id.expect("put stream id"),
+            &mut out_json,
+        )
+    };
+    assert_eq!(code, StorageprimsErrorCode::InvalidArgument);
+    assert!(out_json.is_null());
+    let error = last_error_detail();
+    assert!(!error.contains(sentinel));
 
     assert_eq!(
         storageprims_provider_destroy(handle, provider_id),
@@ -349,16 +451,44 @@ fn create_provider(handle: u64, bucket: &str, endpoint: &str) -> u64 {
 }
 
 fn put_object(handle: u64, provider_id: u64, key: &str, body: &[u8]) {
-    let mut out_json = std::ptr::null_mut();
-    let key = CString::new(key).unwrap();
-    let options = CString::new(
-        serde_json::to_string(&PutOptions {
+    let result = put_object_with_options(
+        handle,
+        provider_id,
+        key,
+        body,
+        PutOptions {
             content_length: Some(body.len() as u64),
             ..PutOptions::default()
-        })
-        .unwrap(),
-    )
-    .unwrap();
+        },
+    );
+    assert_eq!(result.path, key);
+    assert_eq!(result.size, Some(body.len() as u64));
+}
+
+fn put_object_with_options(
+    handle: u64,
+    provider_id: u64,
+    key: &str,
+    body: &[u8],
+    options: PutOptions,
+) -> PutResult {
+    let descriptor = begin_put(handle, provider_id, key, options);
+    write_put_body(&descriptor, body);
+    let result: PutResult = call_json_out(|out| unsafe {
+        storageprims_put_finalize(
+            handle,
+            descriptor.stream_id.expect("put should return a stream id"),
+            out,
+        )
+    });
+    assert_eq!(result.path, key);
+    result
+}
+
+fn begin_put(handle: u64, provider_id: u64, key: &str, options: PutOptions) -> StreamDescriptor {
+    let mut out_json = std::ptr::null_mut();
+    let key = CString::new(key).unwrap();
+    let options = CString::new(serde_json::to_string(&options).unwrap()).unwrap();
 
     let code = unsafe {
         storageprims_put_begin(
@@ -373,15 +503,14 @@ fn put_object(handle: u64, provider_id: u64, key: &str, body: &[u8]) {
 
     let descriptor: StreamDescriptor = take_json_string(out_json);
     assert_eq!(descriptor.mode, "write");
-    let stream_id = descriptor.stream_id.expect("put should return a stream id");
+    assert!(descriptor.stream_id.is_some());
+    descriptor
+}
 
+fn write_put_body(descriptor: &StreamDescriptor, body: &[u8]) {
     let mut file = unsafe { std::fs::File::from_raw_fd(descriptor.fd) };
-    file.write_all(body).expect("ffi write should succeed");
+    let _ = file.write_all(body);
     drop(file);
-
-    let result: PutResult =
-        call_json_out(|out| unsafe { storageprims_put_finalize(handle, stream_id, out) });
-    assert_eq!(result.path, key.to_str().unwrap());
 }
 
 fn read_object(handle: u64, provider_id: u64, key: &str) -> Vec<u8> {

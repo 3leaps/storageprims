@@ -47,12 +47,61 @@ pub struct GetRangeRequest {
     pub length: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PutOptions {
     pub content_length: Option<u64>,
     pub content_type: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
+    /// Atomic condition the provider must enforce while writing.
+    #[serde(default, skip_serializing_if = "PutPrecondition::is_none")]
+    pub precondition: PutPrecondition,
+}
+
+impl std::fmt::Debug for PutOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PutOptions")
+            .field("content_length", &self.content_length)
+            .field("content_type", &self.content_type)
+            .field("metadata", &self.metadata)
+            .field("precondition", &self.precondition)
+            .finish()
+    }
+}
+
+/// Provider-neutral atomic put condition.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum PutPrecondition {
+    /// Preserve the unconditional overwrite behavior.
+    #[default]
+    None,
+    /// Succeed only when the target does not exist.
+    MustNotExist,
+    /// Succeed only when the provider's opaque version token matches.
+    Match {
+        /// Opaque token returned by provider metadata or an earlier put.
+        token: String,
+    },
+}
+
+impl PutPrecondition {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+impl std::fmt::Debug for PutPrecondition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::MustNotExist => f.write_str("MustNotExist"),
+            Self::Match { .. } => f
+                .debug_struct("Match")
+                .field("token", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,4 +170,68 @@ pub struct ProbeResult {
     pub probe_method: String,
     pub latency_ms: u64,
     pub capabilities: Vec<Capability>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn put_options_preserve_unconditional_json_compatibility() {
+        let options = PutOptions {
+            content_length: Some(4),
+            content_type: Some("text/plain".to_string()),
+            ..PutOptions::default()
+        };
+
+        let value = serde_json::to_value(&options).expect("put options serialize");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "content_length": 4,
+                "content_type": "text/plain"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<PutOptions>(value).expect("put options deserialize"),
+            options
+        );
+    }
+
+    #[test]
+    fn put_preconditions_round_trip_through_json() {
+        for precondition in [
+            PutPrecondition::None,
+            PutPrecondition::MustNotExist,
+            PutPrecondition::Match {
+                token: "W/\"opaque\"".to_string(),
+            },
+        ] {
+            let options = PutOptions {
+                precondition,
+                ..PutOptions::default()
+            };
+            let json = serde_json::to_string(&options).expect("put options serialize");
+            let decoded =
+                serde_json::from_str::<PutOptions>(&json).expect("put options deserialize");
+            assert_eq!(decoded, options);
+        }
+    }
+
+    #[test]
+    fn put_precondition_debug_redacts_match_token() {
+        let sentinel = "sensitive-token-sentinel";
+        let rendered = format!(
+            "{:?}",
+            PutOptions {
+                precondition: PutPrecondition::Match {
+                    token: sentinel.to_string(),
+                },
+                ..PutOptions::default()
+            }
+        );
+
+        assert!(!rendered.contains(sentinel));
+        assert!(rendered.contains("<redacted>"));
+    }
 }

@@ -21,6 +21,8 @@ pub enum Capability {
     DelimiterListing,
     MultipartUpload,
     CredentialProbe,
+    /// Atomic provider-side put preconditions.
+    ConditionalPut,
 }
 
 /// Canonical storage provider trait for v0.1.
@@ -68,7 +70,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::types::{CopyStrategy, ObjectSummary};
+    use crate::types::{CopyStrategy, ObjectSummary, PutPrecondition};
 
     struct DummyProvider;
 
@@ -123,14 +125,21 @@ mod tests {
             &self,
             key: &str,
             _body: BoxedByteStream,
-            _options: PutOptions,
+            options: PutOptions,
         ) -> BoxFuture<'_, PutResult> {
             let key = key.to_string();
             Box::pin(async move {
+                if !options.precondition.is_none() {
+                    return Err(crate::error::StorageError::UnsupportedCapability {
+                        provider: ProviderKind::Local,
+                        operation: crate::error::StorageOperation::Put,
+                        capability: Capability::ConditionalPut,
+                    });
+                }
                 Ok(PutResult {
                     path: key,
                     etag: Some("etag-1".to_string()),
-                    size: None,
+                    size: options.content_length,
                 })
             })
         }
@@ -174,6 +183,31 @@ mod tests {
                 provider: ProviderKind::Local,
                 operation: crate::error::StorageOperation::Probe,
                 capability: Capability::CredentialProbe,
+            }
+        ));
+    }
+
+    #[test]
+    fn provider_without_conditional_put_refuses_precondition() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+        let provider = DummyProvider;
+        let error = runtime
+            .block_on(provider.put(
+                "demo.txt",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    precondition: PutPrecondition::MustNotExist,
+                    ..PutOptions::default()
+                },
+            ))
+            .expect_err("conditional put should be unsupported");
+
+        assert!(matches!(
+            error,
+            crate::error::StorageError::UnsupportedCapability {
+                provider: ProviderKind::Local,
+                operation: crate::error::StorageOperation::Put,
+                capability: Capability::ConditionalPut,
             }
         ));
     }

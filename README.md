@@ -36,7 +36,7 @@ Part of the **3leaps prims family**:
 - **List** objects with prefix filtering and pagination
 - **Head** object metadata (size, ETag, content type, last modified)
 - **Get** object content — full download or byte-range requests
-- **Put** object content — streaming upload with metadata
+- **Put** object content — streaming upload with metadata and provider-enforced create/match conditions
 - **Delete** objects
 - **Copy** objects within or across providers
 - **Multipart** uploads for large objects

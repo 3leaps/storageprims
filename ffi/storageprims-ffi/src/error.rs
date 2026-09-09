@@ -4,7 +4,7 @@ use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use serde::Serialize;
-use storageprims_core::{StorageError, StorageErrorCode};
+use storageprims_core::{ConflictKind, StorageError, StorageErrorCode};
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -29,6 +29,8 @@ pub enum StorageprimsErrorCode {
 struct ErrorPayload {
     code: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<ConflictKind>,
 }
 
 #[derive(Default)]
@@ -71,6 +73,10 @@ pub(crate) fn set_error(error: &StorageError) -> StorageprimsErrorCode {
     let payload = ErrorPayload {
         code: format!("{:?}", error.code()).to_ascii_lowercase(),
         message: error.to_string(),
+        kind: match error {
+            StorageError::Conflict { kind, .. } => Some(*kind),
+            _ => None,
+        },
     };
     let detail_json = serde_json::to_string(&payload).unwrap_or_else(|_| {
         "{\"code\":\"other\",\"message\":\"failed to serialize error\"}".to_string()
@@ -89,6 +95,7 @@ fn set_other_error(message: String) -> StorageprimsErrorCode {
     let payload = ErrorPayload {
         code: "other".to_string(),
         message,
+        kind: None,
     };
     let detail_json = serde_json::to_string(&payload).unwrap_or_else(|_| {
         "{\"code\":\"other\",\"message\":\"failed to serialize error\"}".to_string()
@@ -196,6 +203,25 @@ mod tests {
         let value = unsafe { CStr::from_ptr(detail).to_str().expect("valid utf-8") };
         assert!(value.contains("panic caught at storageprims FFI boundary"));
         assert!(value.contains("ffi panic test"));
+        unsafe { crate::storageprims_free_string(detail) };
+    }
+
+    #[test]
+    fn conflict_error_includes_structured_kind() {
+        let error = StorageError::Conflict {
+            provider: ProviderKind::S3,
+            operation: StorageOperation::Put,
+            target: Some("key".to_string()),
+            kind: ConflictKind::TokenMismatch,
+            detail: "precondition failed".to_string(),
+        };
+        set_error(&error);
+
+        let detail = storageprims_last_error();
+        let value = unsafe { CStr::from_ptr(detail).to_str().expect("valid utf-8") };
+        let payload: serde_json::Value = serde_json::from_str(value).expect("valid JSON");
+        assert_eq!(payload["code"], "conflict");
+        assert_eq!(payload["kind"], "token_mismatch");
         unsafe { crate::storageprims_free_string(detail) };
     }
 }

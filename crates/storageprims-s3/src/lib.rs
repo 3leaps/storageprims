@@ -16,10 +16,11 @@ use bytes::Bytes;
 use http_body::{Frame, SizeHint};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use storageprims_core::{
-    sanitize_endpoint, BoxFuture, BoxedByteStream, Capability, CopyRequest, CopyResult,
-    CopyStrategy, CredentialSource, CredentialSourceKind, GetRangeRequest, ListOptions, ListResult,
-    ObjectMetadata, ObjectSummary, ProbeResult, ProviderConfig, ProviderKind, PutOptions,
-    PutResult, Result, StorageError, StorageOperation, StorageProvider, StorageUri,
+    sanitize_endpoint, BoxFuture, BoxedByteStream, Capability, ConflictKind, CopyRequest,
+    CopyResult, CopyStrategy, CredentialSource, CredentialSourceKind, GetRangeRequest, ListOptions,
+    ListResult, ObjectMetadata, ObjectSummary, ProbeResult, ProviderConfig, ProviderKind,
+    PutOptions, PutPrecondition, PutResult, Result, StorageError, StorageOperation,
+    StorageProvider, StorageUri,
 };
 use tokio::io::{AsyncRead, ReadBuf};
 
@@ -37,6 +38,13 @@ pub struct S3Provider {
 struct S3Location {
     bucket: String,
     key: String,
+}
+
+#[derive(Clone, Copy)]
+enum PutPreconditionKind {
+    None,
+    MustNotExist,
+    Match,
 }
 
 struct AsyncReadBody {
@@ -235,6 +243,7 @@ impl StorageProvider for S3Provider {
             Capability::DelimiterListing,
             Capability::MultipartUpload,
             Capability::CredentialProbe,
+            Capability::ConditionalPut,
         ]
     }
 
@@ -408,16 +417,30 @@ impl StorageProvider for S3Provider {
         let key = key.to_string();
         Box::pin(async move {
             let resolved_key = self.resolve_key(&key)?;
-            let content_length =
-                options
-                    .content_length
-                    .ok_or_else(|| StorageError::InvalidArgument {
-                        operation: Some(StorageOperation::Put),
-                        argument: "content_length".to_string(),
-                        reason:
-                            "S3 uploads require a known content length for streamed request bodies"
-                                .to_string(),
-                    })?;
+            let PutOptions {
+                content_length,
+                content_type,
+                metadata,
+                precondition,
+            } = options;
+            let content_length = content_length.ok_or_else(|| StorageError::InvalidArgument {
+                operation: Some(StorageOperation::Put),
+                argument: "content_length".to_string(),
+                reason: "S3 uploads require a known content length for streamed request bodies"
+                    .to_string(),
+            })?;
+            let (if_match, if_none_match, precondition_kind) = match precondition {
+                PutPrecondition::None => (None, None, PutPreconditionKind::None),
+                PutPrecondition::MustNotExist => (
+                    None,
+                    Some("*".to_string()),
+                    PutPreconditionKind::MustNotExist,
+                ),
+                PutPrecondition::Match { token } => {
+                    validate_match_token(&token)?;
+                    (Some(token), None, PutPreconditionKind::Match)
+                }
+            };
 
             let response = self
                 .client
@@ -431,17 +454,18 @@ impl StorageProvider for S3Provider {
                         reason: "content length exceeds S3 request limits".to_string(),
                     }
                 })?)
-                .set_content_type(options.content_type)
-                .set_metadata(Some(options.metadata.into_iter().collect()))
+                .set_content_type(content_type)
+                .set_metadata(Some(metadata.into_iter().collect()))
+                .set_if_match(if_match)
+                .set_if_none_match(if_none_match)
                 .body(byte_stream_from_reader(body, content_length))
                 .send()
                 .await
                 .map_err(|error| {
-                    map_sdk_error(
-                        ProviderKind::S3,
-                        StorageOperation::Put,
+                    map_put_error(
                         Some(&resolved_key),
                         Some(&self.bucket),
+                        precondition_kind,
                         error,
                     )
                 })?;
@@ -449,7 +473,7 @@ impl StorageProvider for S3Provider {
             Ok(PutResult {
                 path: key,
                 etag: response.e_tag().map(ToString::to_string),
-                size: None,
+                size: Some(content_length),
             })
         })
     }
@@ -672,6 +696,132 @@ fn encode_copy_source(bucket: &str, key: &str) -> String {
     )
 }
 
+fn validate_match_token(token: &str) -> Result<()> {
+    let entity_tag = token.strip_prefix("W/").unwrap_or(token);
+    let valid = entity_tag.len() >= 2
+        && entity_tag.starts_with('"')
+        && entity_tag.ends_with('"')
+        && entity_tag.as_bytes()[1..entity_tag.len() - 1]
+            .iter()
+            .all(|byte| *byte == 0x21 || (0x23..=0x7e).contains(byte));
+
+    if valid {
+        Ok(())
+    } else {
+        Err(StorageError::InvalidArgument {
+            operation: Some(StorageOperation::Put),
+            argument: "precondition.match".to_string(),
+            reason: "match token is not a valid S3 entity tag".to_string(),
+        })
+    }
+}
+
+fn map_put_error<E>(
+    target: Option<&str>,
+    container: Option<&str>,
+    precondition: PutPreconditionKind,
+    error: aws_sdk_s3::error::SdkError<E>,
+) -> StorageError
+where
+    E: std::error::Error + ProvideErrorMetadata + Send + Sync + 'static,
+{
+    use aws_sdk_s3::error::SdkError;
+
+    match error {
+        SdkError::ServiceError(context) => {
+            let retry_after = context
+                .raw()
+                .headers()
+                .get("retry-after")
+                .and_then(parse_retry_after_value);
+            let code = context.err().code().unwrap_or_default();
+            match code {
+                "PreconditionFailed" => {
+                    let kind = match precondition {
+                        PutPreconditionKind::MustNotExist => ConflictKind::AlreadyExists,
+                        PutPreconditionKind::Match => ConflictKind::TokenMismatch,
+                        PutPreconditionKind::None => ConflictKind::Other,
+                    };
+                    StorageError::Conflict {
+                        provider: ProviderKind::S3,
+                        operation: StorageOperation::Put,
+                        target: target.map(ToString::to_string),
+                        kind,
+                        detail: "precondition failed".to_string(),
+                    }
+                }
+                "ConditionalRequestConflict" => StorageError::Conflict {
+                    provider: ProviderKind::S3,
+                    operation: StorageOperation::Put,
+                    target: target.map(ToString::to_string),
+                    kind: ConflictKind::Other,
+                    detail: "conditional request conflict".to_string(),
+                },
+                "NoSuchKey" | "NotFound" => StorageError::NotFound {
+                    provider: ProviderKind::S3,
+                    operation: StorageOperation::Put,
+                    path: target.unwrap_or_default().to_string(),
+                },
+                "NoSuchBucket" => StorageError::ContainerNotFound {
+                    provider: ProviderKind::S3,
+                    operation: StorageOperation::Put,
+                    container: container.unwrap_or_default().to_string(),
+                },
+                "AccessDenied" => StorageError::AccessDenied {
+                    provider: ProviderKind::S3,
+                    operation: StorageOperation::Put,
+                    target: target.map(ToString::to_string),
+                    detail: "access denied".to_string(),
+                },
+                "InvalidAccessKeyId" | "SignatureDoesNotMatch" | "ExpiredToken" => {
+                    StorageError::InvalidCredentials {
+                        provider: ProviderKind::S3,
+                        detail: code.to_string(),
+                    }
+                }
+                "SlowDown" | "Throttling" | "TooManyRequestsException" => StorageError::Throttled {
+                    provider: ProviderKind::S3,
+                    operation: StorageOperation::Put,
+                    retry_after,
+                },
+                "InvalidRequest" | "InvalidWriteOffset" => StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::Put),
+                    argument: target.unwrap_or_default().to_string(),
+                    reason: code.to_string(),
+                },
+                _ => StorageError::Other {
+                    provider: Some(ProviderKind::S3),
+                    operation: Some(StorageOperation::Put),
+                    detail: if code.is_empty() {
+                        "S3 put failed".to_string()
+                    } else {
+                        code.to_string()
+                    },
+                    source: None,
+                },
+            }
+        }
+        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) | SdkError::ResponseError(_) => {
+            StorageError::ProviderUnavailable {
+                provider: ProviderKind::S3,
+                operation: StorageOperation::Put,
+                detail: "S3 put request outcome is unknown".to_string(),
+            }
+        }
+        SdkError::ConstructionFailure(_) => StorageError::InvalidArgument {
+            operation: Some(StorageOperation::Put),
+            argument: target.unwrap_or_default().to_string(),
+            reason: "failed to construct S3 put request".to_string(),
+        },
+        _ => StorageError::Other {
+            provider: Some(ProviderKind::S3),
+            operation: Some(StorageOperation::Put),
+            detail: "S3 put failed".to_string(),
+            source: None,
+        },
+    }
+}
+
 fn map_sdk_error<E>(
     provider: ProviderKind,
     operation: StorageOperation,
@@ -725,6 +875,7 @@ where
                     provider,
                     operation,
                     target: target.map(ToString::to_string),
+                    kind: ConflictKind::Other,
                     detail: code.to_string(),
                 },
                 "InvalidRequest" | "InvalidWriteOffset" => StorageError::InvalidArgument {
@@ -1072,7 +1223,9 @@ impl http_body::Body for AsyncReadBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_sdk_s3::operation::{get_object::GetObjectError, head_object::HeadObjectError};
+    use aws_sdk_s3::operation::{
+        get_object::GetObjectError, head_object::HeadObjectError, put_object::PutObjectError,
+    };
     use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
     use aws_smithy_runtime_api::http::{Response, StatusCode};
     use aws_smithy_types::body::SdkBody;
@@ -1269,6 +1422,111 @@ mod tests {
             encode_copy_source("bucket-a", "path with spaces/a+b#c.txt"),
             "bucket%2Da/path%20with%20spaces%2Fa%2Bb%23c%2Etxt"
         );
+    }
+
+    #[test]
+    fn match_token_validation_accepts_opaque_entity_tags_byte_for_byte() {
+        for token in [
+            "\"opaque\"",
+            "W/\"weak-form\"",
+            "\"!#$%&'()*+,-./:;<=>?@[]^_`{|}~\"",
+        ] {
+            validate_match_token(token).expect("valid entity tag should be accepted");
+        }
+    }
+
+    #[test]
+    fn match_token_validation_rejects_invalid_values_without_disclosure() {
+        for token in [
+            "",
+            "unquoted",
+            "\"line\nbreak\"",
+            "\"nul\0byte\"",
+            "\"delete\u{7f}\"",
+            "\"non-ascii-\u{e9}\"",
+        ] {
+            let error = validate_match_token(token).expect_err("invalid entity tag should fail");
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+            assert!(matches!(
+                error,
+                StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::Put),
+                    ref argument,
+                    ..
+                } if argument == "precondition.match"
+            ));
+            if !token.is_empty() {
+                assert!(!display.contains(token));
+                assert!(!debug.contains(token));
+            }
+        }
+    }
+
+    #[test]
+    fn put_precondition_failure_maps_from_request_intent() {
+        for (precondition, expected_kind) in [
+            (
+                PutPreconditionKind::MustNotExist,
+                ConflictKind::AlreadyExists,
+            ),
+            (PutPreconditionKind::Match, ConflictKind::TokenMismatch),
+            (PutPreconditionKind::None, ConflictKind::Other),
+        ] {
+            let error = map_put_error(
+                Some("key"),
+                Some("bucket"),
+                precondition,
+                aws_sdk_s3::error::SdkError::service_error(
+                    PutObjectError::generic(
+                        ErrorMetadata::builder().code("PreconditionFailed").build(),
+                    ),
+                    Response::new(
+                        StatusCode::try_from(412).expect("valid status"),
+                        SdkBody::empty(),
+                    ),
+                ),
+            );
+
+            assert!(matches!(
+                error,
+                StorageError::Conflict {
+                    provider: ProviderKind::S3,
+                    operation: StorageOperation::Put,
+                    kind,
+                    ref detail,
+                    ..
+                } if kind == expected_kind && detail == "precondition failed"
+            ));
+        }
+    }
+
+    #[test]
+    fn conditional_request_conflict_stays_other() {
+        let error = map_put_error(
+            Some("key"),
+            Some("bucket"),
+            PutPreconditionKind::MustNotExist,
+            aws_sdk_s3::error::SdkError::service_error(
+                PutObjectError::generic(
+                    ErrorMetadata::builder()
+                        .code("ConditionalRequestConflict")
+                        .build(),
+                ),
+                Response::new(
+                    StatusCode::try_from(409).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+
+        assert!(matches!(
+            error,
+            StorageError::Conflict {
+                kind: ConflictKind::Other,
+                ..
+            }
+        ));
     }
 
     #[test]

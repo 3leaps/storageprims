@@ -28,6 +28,7 @@ impl std::fmt::Display for ProviderKind {
 }
 
 /// Canonical storage operation identifiers.
+/// Stable reason for a conditional-write conflict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageOperation {
@@ -83,6 +84,14 @@ pub enum StorageErrorCode {
     UnsupportedCapability,
     Conflict,
     Io,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictKind {
+    AlreadyExists,
+    TokenMismatch,
     Other,
 }
 
@@ -153,6 +162,8 @@ pub enum StorageError {
         provider: ProviderKind,
         operation: StorageOperation,
         target: Option<String>,
+        /// Machine-readable reason; callers must not parse `detail`.
+        kind: ConflictKind,
         detail: String,
     },
 

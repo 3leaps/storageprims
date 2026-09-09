@@ -8,9 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use storageprims_core::{
-    BoxedByteStream, Capability, CopyRequest, CredentialSource, CredentialSourceKind,
-    GetRangeRequest, ProviderConfig, ProviderKind, PutOptions, StorageError, StorageProvider,
-    TargetConfig,
+    BoxedByteStream, Capability, ConflictKind, CopyRequest, CredentialSource, CredentialSourceKind,
+    GetRangeRequest, ProviderConfig, ProviderKind, PutOptions, PutPrecondition, StorageError,
+    StorageProvider, TargetConfig,
 };
 use storageprims_s3::S3Provider;
 use tokio::io::AsyncReadExt;
@@ -34,12 +34,14 @@ async fn s3_provider_round_trips_against_localstack() {
                 content_length: Some("hello from localstack".len() as u64),
                 content_type: Some("text/plain".to_string()),
                 metadata: metadata.clone(),
+                precondition: PutPrecondition::None,
             },
         )
         .await
         .expect("put succeeds");
     assert_eq!(put_result.path, "fixtures/data.txt");
     assert!(put_result.etag.is_some());
+    assert_eq!(put_result.size, Some("hello from localstack".len() as u64));
 
     let head = provider
         .head("fixtures/data.txt")
@@ -110,6 +112,171 @@ async fn s3_provider_round_trips_against_localstack() {
         .delete("fixtures/copy with spaces+#.txt")
         .await
         .expect("delete remains idempotent");
+}
+
+#[tokio::test]
+async fn s3_provider_honors_conditional_put_against_localstack() {
+    let test_context = TestContext::new().await;
+    let provider = test_context.provider().await;
+    assert!(provider.has_capability(Capability::ConditionalPut));
+
+    let created = provider
+        .put(
+            "conditional/data.txt",
+            boxed_reader("first"),
+            PutOptions {
+                content_length: Some(5),
+                precondition: PutPrecondition::MustNotExist,
+                ..PutOptions::default()
+            },
+        )
+        .await
+        .expect("create-only put succeeds for an absent object");
+    assert_eq!(created.size, Some(5));
+    let first_etag = created.etag.expect("put returns an ETag");
+
+    let already_exists = provider
+        .put(
+            "conditional/data.txt",
+            boxed_reader("second"),
+            PutOptions {
+                content_length: Some(6),
+                precondition: PutPrecondition::MustNotExist,
+                ..PutOptions::default()
+            },
+        )
+        .await
+        .expect_err("create-only put conflicts for an existing object");
+    assert!(matches!(
+        already_exists,
+        StorageError::Conflict {
+            kind: ConflictKind::AlreadyExists,
+            ..
+        }
+    ));
+
+    let replaced = provider
+        .put(
+            "conditional/data.txt",
+            boxed_reader("replacement"),
+            PutOptions {
+                content_length: Some(11),
+                precondition: PutPrecondition::Match { token: first_etag },
+                ..PutOptions::default()
+            },
+        )
+        .await
+        .expect("matching conditional put succeeds");
+    assert_eq!(replaced.size, Some(11));
+
+    let mismatch = provider
+        .put(
+            "conditional/data.txt",
+            boxed_reader("rejected"),
+            PutOptions {
+                content_length: Some(8),
+                precondition: PutPrecondition::Match {
+                    token: "\"not-the-current-etag\"".to_string(),
+                },
+                ..PutOptions::default()
+            },
+        )
+        .await
+        .expect_err("mismatching conditional put conflicts");
+    assert!(matches!(
+        mismatch,
+        StorageError::Conflict {
+            kind: ConflictKind::TokenMismatch,
+            ..
+        }
+    ));
+
+    let missing = provider
+        .put(
+            "conditional/missing.txt",
+            boxed_reader("rejected"),
+            PutOptions {
+                content_length: Some(8),
+                precondition: PutPrecondition::Match {
+                    token: "\"expected-etag\"".to_string(),
+                },
+                ..PutOptions::default()
+            },
+        )
+        .await
+        .expect_err("match against a missing object should fail");
+    assert!(matches!(missing, StorageError::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn s3_provider_rejects_invalid_match_before_transport_without_disclosure() {
+    let sentinel = "\"sentinel\nmatch-token\"";
+    let provider = S3Provider::from_config(ProviderConfig {
+        provider: ProviderKind::S3,
+        target: TargetConfig {
+            container: Some("bucket".to_string()),
+            region: Some(TEST_REGION.to_string()),
+            endpoint: Some("http://127.0.0.1:9".to_string()),
+            force_path_style: Some(true),
+            ..TargetConfig::default()
+        },
+        credentials: CredentialSource::InlineStatic {
+            values: credentials_map(),
+        },
+    })
+    .await
+    .expect("provider config should be valid");
+
+    let error = provider
+        .put(
+            "anything.txt",
+            boxed_reader("payload"),
+            PutOptions {
+                content_length: Some(7),
+                precondition: PutPrecondition::Match {
+                    token: sentinel.to_string(),
+                },
+                ..PutOptions::default()
+            },
+        )
+        .await
+        .expect_err("invalid match token should fail before transport");
+    assert!(matches!(error, StorageError::InvalidArgument { .. }));
+    assert!(!error.to_string().contains(sentinel));
+    assert!(!format!("{error:?}").contains(sentinel));
+}
+
+#[tokio::test]
+async fn s3_transport_failure_is_not_a_precondition_conflict() {
+    let provider = S3Provider::from_config(ProviderConfig {
+        provider: ProviderKind::S3,
+        target: TargetConfig {
+            container: Some("bucket".to_string()),
+            region: Some(TEST_REGION.to_string()),
+            endpoint: Some("http://127.0.0.1:9".to_string()),
+            force_path_style: Some(true),
+            ..TargetConfig::default()
+        },
+        credentials: CredentialSource::InlineStatic {
+            values: credentials_map(),
+        },
+    })
+    .await
+    .expect("provider config should be valid");
+
+    let error = provider
+        .put(
+            "anything.txt",
+            boxed_reader("payload"),
+            PutOptions {
+                content_length: Some(7),
+                precondition: PutPrecondition::MustNotExist,
+                ..PutOptions::default()
+            },
+        )
+        .await
+        .expect_err("unreachable endpoint should fail");
+    assert!(matches!(error, StorageError::ProviderUnavailable { .. }));
 }
 
 #[tokio::test]
