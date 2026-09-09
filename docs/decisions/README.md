@@ -5,18 +5,18 @@ storageprims.
 
 ## Index
 
-| ID       | Type     | Title                                                                                                                                        | Status   | Date       |
-| -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------- |
-| ADR-0001 | Arch     | [Canonical Core Contract and Provider-Neutral Surface](ADR-0001-canonical-core-contract-and-provider-neutral-surface.md)                     | Approved | 2026-03-16 |
-| ADR-0002 | Arch     | [Crate Structure and Library-First Adapter Boundaries](ADR-0002-crate-structure-and-library-first-adapter-boundaries.md)                     | Approved | 2026-03-16 |
-| ADR-0003 | Arch     | [FFI Design for Metadata and Streaming Data Plane](ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md)                             | Approved | 2026-03-16 |
-| ADR-0004 | Arch     | [Error Taxonomy and Cross-Provider Mapping](ADR-0004-error-taxonomy-and-cross-provider-mapping.md)                                           | Proposed | 2026-03-16 |
-| DDR-0003 | Design   | [List Pagination Semantics and Continuation-Token Contract](DDR-0003-list-pagination-semantics-and-continuation-token-contract.md)           | Approved | 2026-03-16 |
-| DDR-0004 | Design   | [Optional Capability Model](DDR-0004-optional-capability-model.md)                                                                           | Proposed | 2026-03-16 |
-| DDR-0005 | Design   | [Copy Semantics Across Same-Provider and Cross-Provider Targets](DDR-0005-copy-semantics-across-same-provider-and-cross-provider-targets.md) | Approved | 2026-03-16 |
-| DDR-0006 | Design   | [Provider Configuration Surface and Credential Representation](DDR-0006-provider-configuration-surface-and-credential-representation.md)     | Proposed | 2026-03-16 |
-| DDR-0007 | Design   | [Binary-First Remote Text Inspection and Helper Boundary](DDR-0007-binary-first-remote-text-inspection-and-helper-boundary.md)               | Approved | 2026-03-16 |
-| SDR-0001 | Security | [Credential Boundary and Redaction Policy](SDR-0001-credential-boundary-and-redaction-policy.md)                                             | Proposed | 2026-03-16 |
+| ID       | Type     | Title                                                                                                                                        | Status              | Date       |
+| -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ---------- |
+| ADR-0001 | Arch     | [Canonical Core Contract and Provider-Neutral Surface](ADR-0001-canonical-core-contract-and-provider-neutral-surface.md)                     | Approved            | 2026-03-16 |
+| ADR-0002 | Arch     | [Crate Structure and Library-First Adapter Boundaries](ADR-0002-crate-structure-and-library-first-adapter-boundaries.md)                     | Approved            | 2026-03-16 |
+| ADR-0003 | Arch     | [FFI Design for Metadata and Streaming Data Plane](ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md)                             | Approved            | 2026-03-16 |
+| ADR-0004 | Arch     | [Error Taxonomy and Cross-Provider Mapping](ADR-0004-error-taxonomy-and-cross-provider-mapping.md)                                           | Proposed            | 2026-03-16 |
+| DDR-0003 | Design   | [List Pagination Semantics and Continuation-Token Contract](DDR-0003-list-pagination-semantics-and-continuation-token-contract.md)           | Approved            | 2026-03-16 |
+| DDR-0004 | Design   | [Optional Capability Model](DDR-0004-optional-capability-model.md)                                                                           | Accepted-as-amended | 2026-03-16 |
+| DDR-0005 | Design   | [Copy Semantics Across Same-Provider and Cross-Provider Targets](DDR-0005-copy-semantics-across-same-provider-and-cross-provider-targets.md) | Approved            | 2026-03-16 |
+| DDR-0006 | Design   | [Provider Configuration Surface and Credential Representation](DDR-0006-provider-configuration-surface-and-credential-representation.md)     | Proposed            | 2026-03-16 |
+| DDR-0007 | Design   | [Binary-First Remote Text Inspection and Helper Boundary](DDR-0007-binary-first-remote-text-inspection-and-helper-boundary.md)               | Approved            | 2026-03-16 |
+| SDR-0001 | Security | [Credential Boundary and Redaction Policy](SDR-0001-credential-boundary-and-redaction-policy.md)                                             | Proposed            | 2026-03-16 |
 
 ## Record Types
 

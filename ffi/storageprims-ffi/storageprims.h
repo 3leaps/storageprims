@@ -74,6 +74,21 @@ StorageprimsErrorCode storageprims_provider_create(uint64_t handle,
 StorageprimsErrorCode storageprims_provider_destroy(uint64_t handle, uint64_t provider_id);
 
 /**
+ * Return the provider's callable capabilities as a JSON array.
+ *
+ * This query reads only the in-process provider registry and does not perform
+ * credential resolution, provider probes, or network I/O.
+ *
+ * # Safety
+ *
+ * `out_capabilities_json` must be non-null and writable for a `char*` returned
+ * by `storageprims_free_string`.
+ */
+StorageprimsErrorCode storageprims_provider_capabilities(uint64_t handle,
+                                                         uint64_t provider_id,
+                                                         char **out_capabilities_json);
+
+/**
  * List objects via the JSON control plane.
  *
  * # Safety

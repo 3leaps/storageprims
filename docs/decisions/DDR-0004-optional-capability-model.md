@@ -1,6 +1,6 @@
 # DDR-0004: Optional Capability Model
 
-> **Status**: Proposed
+> **Status**: Accepted-as-amended
 > **Date**: 2026-03-16
 > **Authors**: entarch, devlead, ffiarch, Architecture Council
 
@@ -32,6 +32,8 @@ storageprims adopts a **core-plus-capabilities** model.
 - A small universal contract is guaranteed across providers and bindings.
 - Additional behaviors are modeled as optional capabilities.
 - Capability presence is explicit and queryable.
+- A provider advertises a capability if and only if that behavior is callable through its
+  current public surface.
 
 ### Core contract
 
@@ -86,10 +88,12 @@ without expanding the minimum guarantee.
 Bindings cannot rely on Rust trait assertions directly, so optional capabilities MUST also have
 a binding-friendly representation.
 
-storageprims SHOULD expose an explicit capability query surface, conceptually similar to:
+storageprims exposes an explicit capability query surface as a list of stable identifiers.
+The query MUST be deterministic and MUST NOT perform provider I/O, credential resolution, or
+connectivity probes.
 
-- `capabilities()` returning a list/set of capability identifiers, or
-- `has_capability(name)` returning a boolean
+Rust providers expose `capabilities()` and `has_capability()`. Bindings use a standalone FFI
+query that returns the same identifiers as a JSON array.
 
 The binding contract should let Go and TypeScript answer questions like:
 
@@ -166,17 +170,20 @@ capability discovery for bindings and multi-provider consumers.
 
 ## Implementation Notes
 
-- The first optional capability to design concretely should probably be delimiter/common-prefix listing because gonimbus depends on it heavily.
-- Multipart should follow closely because it is useful for large transfers and safe write-probe behavior.
+- Capability identifiers may exist before their extension traits, but providers MUST NOT advertise
+  those identifiers until callers can invoke the corresponding behavior.
+- Delimiter/common-prefix listing and multipart upload extension traits remain future work.
+- Conditional put is the first advertised optional data-plane capability.
 - The capability identifier names used in JSON/FFI should be stable and intentionally small.
 
-## Decision Points
+## Acceptance Amendment
 
-This record should remain `Proposed` until:
+The capability model is accepted with the following amendment:
 
-- the first provider implementation validates the trait split in real code
-- the FFI and Go binding surfaces prove that capability discovery works cleanly across language boundaries
-- at least one optional capability is exercised end-to-end without bloating the universal trait surface
+- advertisement means the capability is callable now, not merely planned or supported by the
+  underlying storage service
+- extension traits remain the preferred future Rust shape for advanced optional operations
+- the FFI discovery surface returns only closed capability identifiers and performs no provider I/O
 
 ## References
 

@@ -82,6 +82,36 @@ pub extern "C" fn storageprims_provider_destroy(
     }
 }
 
+/// Return the provider's callable capabilities as a JSON array.
+///
+/// This query reads only the in-process provider registry and does not perform
+/// credential resolution, provider probes, or network I/O.
+///
+/// # Safety
+///
+/// `out_capabilities_json` must be non-null and writable for a `char*` returned
+/// by `storageprims_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn storageprims_provider_capabilities(
+    handle: u64,
+    provider_id: u64,
+    out_capabilities_json: *mut *mut c_char,
+) -> StorageprimsErrorCode {
+    match with_error_boundary(|| {
+        initialize_out_json(
+            out_capabilities_json,
+            "out_capabilities_json",
+            StorageOperation::ConfigureProvider,
+        )?;
+        let runtime = get_runtime(handle)?;
+        let provider = runtime.provider(provider_id)?;
+        write_json(out_capabilities_json, &provider.capabilities())
+    }) {
+        Ok(()) => StorageprimsErrorCode::Ok,
+        Err(code) => code,
+    }
+}
+
 /// List objects via the JSON control plane.
 ///
 /// # Safety

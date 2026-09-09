@@ -239,25 +239,21 @@ impl StorageProvider for S3Provider {
     }
 
     fn capabilities(&self) -> Vec<Capability> {
-        vec![
-            Capability::DelimiterListing,
-            Capability::MultipartUpload,
-            Capability::CredentialProbe,
-            Capability::ConditionalPut,
-        ]
+        vec![Capability::CredentialProbe, Capability::ConditionalPut]
     }
 
     fn list(&self, options: ListOptions) -> BoxFuture<'_, ListResult> {
         Box::pin(async move {
             let prefix =
                 resolve_list_prefix(self.root_prefix.as_deref(), options.prefix.as_deref())?;
+            let max_keys = normalize_max_keys(options.max_keys)?;
             let response = self
                 .client
                 .list_objects_v2()
                 .bucket(&self.bucket)
                 .set_prefix(prefix.clone())
                 .set_continuation_token(options.continuation_token)
-                .set_max_keys(options.max_keys.and_then(|value| i32::try_from(value).ok()))
+                .set_max_keys(max_keys)
                 .send()
                 .await
                 .map_err(|error| {
@@ -590,6 +586,19 @@ impl S3Provider {
             latency_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
             capabilities: self.capabilities(),
         }
+    }
+}
+
+fn normalize_max_keys(max_keys: Option<u32>) -> Result<Option<i32>> {
+    match max_keys {
+        None | Some(0) => Ok(None),
+        Some(value) => i32::try_from(value)
+            .map(Some)
+            .map_err(|_| StorageError::InvalidArgument {
+                operation: Some(StorageOperation::List),
+                argument: "max_keys".to_string(),
+                reason: "value exceeds the S3 request limit".to_string(),
+            }),
     }
 }
 
@@ -1372,6 +1381,58 @@ mod tests {
         assert_eq!(
             resolve_list_prefix(None, Some("docs/http://archive/")).unwrap(),
             Some("docs/http://archive/".to_string())
+        );
+    }
+
+    #[test]
+    fn max_keys_uses_provider_default_for_zero_and_rejects_overflow() {
+        assert_eq!(normalize_max_keys(None).unwrap(), None);
+        assert_eq!(normalize_max_keys(Some(0)).unwrap(), None);
+        assert_eq!(normalize_max_keys(Some(1)).unwrap(), Some(1));
+        assert_eq!(
+            normalize_max_keys(Some(i32::MAX as u32)).unwrap(),
+            Some(i32::MAX)
+        );
+
+        let error = normalize_max_keys(Some(u32::MAX))
+            .expect_err("values outside S3's representation must fail");
+        assert!(matches!(
+            error,
+            StorageError::InvalidArgument {
+                operation: Some(StorageOperation::List),
+                ref argument,
+                ..
+            } if argument == "max_keys"
+        ));
+        assert!(!error.to_string().contains(&u32::MAX.to_string()));
+    }
+
+    #[test]
+    fn s3_advertises_only_callable_capabilities() {
+        let provider = S3Provider {
+            client: Client::from_conf(
+                aws_sdk_s3::config::Builder::new()
+                    .behavior_version_latest()
+                    .region(Region::new("us-east-1"))
+                    .credentials_provider(Credentials::from_keys("test", "test", None))
+                    .build(),
+            ),
+            sts_client: aws_sdk_sts::Client::from_conf(
+                aws_sdk_sts::config::Builder::new()
+                    .behavior_version_latest()
+                    .region(Region::new("us-east-1"))
+                    .credentials_provider(Credentials::from_keys("test", "test", None))
+                    .build(),
+            ),
+            bucket: "bucket-a".to_string(),
+            root_prefix: None,
+            endpoint: None,
+            credential_source: CredentialSourceKind::InlineStatic,
+        };
+
+        assert_eq!(
+            provider.capabilities(),
+            vec![Capability::CredentialProbe, Capability::ConditionalPut]
         );
     }
 

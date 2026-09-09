@@ -117,10 +117,16 @@ belongs above storageprims.
 Semantics:
 
 - zero/omitted means provider or library default
+- providers MUST omit a zero page-size value from requests rather than forwarding zero
+- values that exceed a provider's page-size representation MUST fail as `InvalidArgument`
+  instead of silently falling back to the provider default
 - providers may return fewer objects than requested
 - if more results remain, `is_truncated` MUST be `true`
 - when more results remain, `continuation_token` MUST be present
 - when no more results remain, `continuation_token` MUST be absent
+
+Implementation conformance: the S3 provider normalizes `max_keys` before request construction,
+omitting zero and rejecting values above `i32::MAX` locally as `InvalidArgument`.
 
 #### 5. storageprims preserves provider-native page order
 

@@ -80,7 +80,7 @@ mod tests {
         }
 
         fn capabilities(&self) -> Vec<Capability> {
-            vec![Capability::DelimiterListing]
+            Vec::new()
         }
 
         fn list(&self, _options: ListOptions) -> BoxFuture<'_, ListResult> {
@@ -165,7 +165,7 @@ mod tests {
     fn trait_is_object_safe() {
         let provider: Box<dyn StorageProvider> = Box::new(DummyProvider);
         assert_eq!(provider.provider_kind(), ProviderKind::Local);
-        assert!(provider.has_capability(Capability::DelimiterListing));
+        assert!(!provider.has_capability(Capability::DelimiterListing));
         assert!(!provider.has_capability(Capability::MultipartUpload));
     }
 

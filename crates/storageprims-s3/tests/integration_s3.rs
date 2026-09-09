@@ -336,6 +336,69 @@ async fn s3_provider_paginates_list_results_against_localstack() {
 }
 
 #[tokio::test]
+async fn s3_provider_omits_zero_max_keys_and_rejects_overflow_before_transport() {
+    let test_context = TestContext::new().await;
+    let provider = test_context.provider().await;
+
+    for key in ["defaults/a.txt", "defaults/b.txt"] {
+        provider
+            .put(
+                key,
+                boxed_reader(key),
+                PutOptions {
+                    content_length: Some(key.len() as u64),
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect("seed object for default page-size test");
+    }
+
+    let page = provider
+        .list(storageprims_core::ListOptions {
+            prefix: Some("defaults/".to_string()),
+            continuation_token: None,
+            max_keys: Some(0),
+        })
+        .await
+        .expect("zero max_keys uses the provider default");
+    assert_eq!(page.objects.len(), 2);
+
+    let unreachable = S3Provider::from_config(ProviderConfig {
+        provider: ProviderKind::S3,
+        target: TargetConfig {
+            container: Some("no-network".to_string()),
+            region: Some(TEST_REGION.to_string()),
+            endpoint: Some("http://127.0.0.1:9".to_string()),
+            force_path_style: Some(true),
+            ..TargetConfig::default()
+        },
+        credentials: CredentialSource::InlineStatic {
+            values: credentials_map(),
+        },
+    })
+    .await
+    .expect("provider config should be valid");
+
+    let error = unreachable
+        .list(storageprims_core::ListOptions {
+            prefix: None,
+            continuation_token: None,
+            max_keys: Some(u32::MAX),
+        })
+        .await
+        .expect_err("overflow must fail before transport");
+    assert!(matches!(
+        error,
+        StorageError::InvalidArgument {
+            operation: Some(storageprims_core::StorageOperation::List),
+            ref argument,
+            ..
+        } if argument == "max_keys"
+    ));
+}
+
+#[tokio::test]
 async fn s3_provider_contains_rooted_list_to_exact_prefix_segment() {
     let test_context = TestContext::new().await;
     let unrooted_provider = test_context.provider().await;
@@ -570,8 +633,10 @@ async fn s3_provider_probe_uses_head_bucket_fallback_against_localstack() {
     );
     assert_eq!(result.credential_source, CredentialSourceKind::InlineStatic);
     assert!(result.latency_ms < 30_000);
-    assert!(result.capabilities.contains(&Capability::CredentialProbe));
-    assert!(result.capabilities.contains(&Capability::DelimiterListing));
+    assert_eq!(
+        result.capabilities,
+        vec![Capability::CredentialProbe, Capability::ConditionalPut]
+    );
 }
 
 struct TestContext {

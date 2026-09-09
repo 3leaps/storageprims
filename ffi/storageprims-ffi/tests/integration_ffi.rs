@@ -17,7 +17,8 @@ use storageprims_ffi::{
     storageprims_clear_error, storageprims_copy, storageprims_count_lines, storageprims_delete,
     storageprims_free_string, storageprims_get, storageprims_get_finalize, storageprims_get_range,
     storageprims_head, storageprims_head_lines, storageprims_init, storageprims_last_error,
-    storageprims_list, storageprims_mid_lines, storageprims_probe, storageprims_provider_create,
+    storageprims_last_error_code, storageprims_list, storageprims_mid_lines, storageprims_probe,
+    storageprims_provider_capabilities, storageprims_provider_create,
     storageprims_provider_destroy, storageprims_put_begin, storageprims_put_finalize,
     storageprims_shutdown, storageprims_tail_lines, StorageprimsErrorCode,
 };
@@ -308,10 +309,52 @@ fn ffi_probe_uses_head_bucket_fallback_against_localstack() {
     assert_eq!(result.probe_method, "s3:HeadBucket");
     assert_eq!(result.credential_source, CredentialSourceKind::InlineStatic);
     assert!(result.latency_ms < 30_000);
-    assert!(result
-        .capabilities
-        .contains(&storageprims_core::Capability::CredentialProbe));
+    assert_eq!(
+        result.capabilities,
+        vec![
+            storageprims_core::Capability::CredentialProbe,
+            storageprims_core::Capability::ConditionalPut,
+        ]
+    );
     assert_eq!(result.endpoint.as_deref(), Some(endpoint.as_str()));
+
+    assert_eq!(
+        storageprims_provider_destroy(handle, provider_id),
+        StorageprimsErrorCode::Ok
+    );
+    assert_eq!(storageprims_shutdown(handle), StorageprimsErrorCode::Ok);
+}
+
+#[test]
+fn ffi_capability_query_is_exact_no_io_and_clears_failure_state() {
+    let handle = storageprims_init();
+    assert!(handle > 0);
+    let provider_id = create_provider(handle, "no-network", "http://127.0.0.1:9");
+
+    let mut stale = std::ptr::dangling_mut::<std::os::raw::c_char>();
+    let code = unsafe { storageprims_provider_capabilities(u64::MAX, provider_id, &mut stale) };
+    assert_eq!(code, StorageprimsErrorCode::InvalidArgument);
+    assert!(stale.is_null());
+
+    stale = std::ptr::dangling_mut::<std::os::raw::c_char>();
+    let code = unsafe { storageprims_provider_capabilities(handle, u64::MAX, &mut stale) };
+    assert_eq!(code, StorageprimsErrorCode::InvalidArgument);
+    assert!(stale.is_null());
+
+    let mut out_json = std::ptr::null_mut();
+    let code = unsafe { storageprims_provider_capabilities(handle, provider_id, &mut out_json) };
+    assert_eq!(code, StorageprimsErrorCode::Ok);
+    assert_eq!(storageprims_last_error_code(), StorageprimsErrorCode::Ok);
+    let json = unsafe { CStr::from_ptr(out_json) }
+        .to_str()
+        .expect("capability output should be valid utf-8")
+        .to_string();
+    unsafe { storageprims_free_string(out_json) };
+    assert_eq!(json, r#"["credential_probe","conditional_put"]"#);
+
+    let code =
+        unsafe { storageprims_provider_capabilities(handle, provider_id, std::ptr::null_mut()) };
+    assert_eq!(code, StorageprimsErrorCode::InvalidArgument);
 
     assert_eq!(
         storageprims_provider_destroy(handle, provider_id),
