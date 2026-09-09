@@ -137,10 +137,10 @@ pub struct CopyResult {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum CredentialSourceKind {
     DefaultChain,
-    Profile { name: String },
-    CredentialsFile { path: String },
+    Profile,
+    CredentialsFile,
     InlineStatic,
-    Env { variables: Vec<String> },
+    Env,
     InlineEnvMap,
     None,
 }
@@ -149,17 +149,24 @@ impl CredentialSourceKind {
     pub fn from_config(credentials: &CredentialSource) -> Self {
         match credentials {
             CredentialSource::DefaultChain => Self::DefaultChain,
-            CredentialSource::Profile { name } => Self::Profile { name: name.clone() },
-            CredentialSource::CredentialsFile { path } => {
-                Self::CredentialsFile { path: path.clone() }
-            }
+            CredentialSource::Profile { .. } => Self::Profile,
+            CredentialSource::CredentialsFile { .. } => Self::CredentialsFile,
             CredentialSource::InlineStatic { .. } => Self::InlineStatic,
-            CredentialSource::Env { variables } => Self::Env {
-                variables: variables.clone(),
-            },
+            CredentialSource::Env { .. } => Self::Env,
             CredentialSource::InlineEnvMap { .. } => Self::InlineEnvMap,
         }
     }
+}
+
+/// Scope whose reachability was checked by a provider probe.
+///
+/// A configured-container probe establishes only that the provider can reach
+/// the configured container. It does not prove authorization for list, get,
+/// put, or any other object operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeScope {
+    ConfiguredContainer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +174,7 @@ pub struct ProbeResult {
     pub provider: ProviderKind,
     pub endpoint: Option<String>,
     pub credential_source: CredentialSourceKind,
+    pub scope: ProbeScope,
     pub probe_method: String,
     pub latency_ms: u64,
     pub capabilities: Vec<Capability>,
@@ -175,6 +183,48 @@ pub struct ProbeResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_source_kind_serializes_as_class_only() {
+        for (credentials, expected_mode) in [
+            (
+                CredentialSource::Profile {
+                    name: "profile-sentinel".to_string(),
+                },
+                "profile",
+            ),
+            (
+                CredentialSource::CredentialsFile {
+                    path: "/credential-file-sentinel".to_string(),
+                },
+                "credentials_file",
+            ),
+            (
+                CredentialSource::Env {
+                    variables: vec!["ENV_NAME_SENTINEL".to_string()],
+                },
+                "env",
+            ),
+            (
+                CredentialSource::InlineStatic {
+                    values: Default::default(),
+                },
+                "inline_static",
+            ),
+            (
+                CredentialSource::InlineEnvMap {
+                    values: Default::default(),
+                },
+                "inline_env_map",
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_value(CredentialSourceKind::from_config(&credentials))
+                    .expect("source kind serializes"),
+                serde_json::json!({"mode": expected_mode})
+            );
+        }
+    }
 
     #[test]
     fn put_options_preserve_unconditional_json_compatibility() {

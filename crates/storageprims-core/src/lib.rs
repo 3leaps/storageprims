@@ -13,6 +13,7 @@ pub use error::{
 pub use provider::{BoxFuture, BoxedByteStream, Capability, StorageProvider};
 pub use types::{
     CopyRequest, CopyResult, CopyStrategy, CredentialSourceKind, GetRangeRequest, ListOptions,
-    ListResult, ObjectMetadata, ObjectSummary, ProbeResult, PutOptions, PutPrecondition, PutResult,
+    ListResult, ObjectMetadata, ObjectSummary, ProbeResult, ProbeScope, PutOptions,
+    PutPrecondition, PutResult,
 };
 pub use uri::StorageUri;

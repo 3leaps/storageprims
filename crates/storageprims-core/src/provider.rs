@@ -54,6 +54,10 @@ pub trait StorageProvider: Send + Sync {
 
     fn copy(&self, request: CopyRequest) -> BoxFuture<'_, CopyResult>;
 
+    /// Check reachability of the provider's configured container.
+    ///
+    /// A successful probe does not establish authorization for individual
+    /// object operations such as list, get, or put.
     fn probe(&self) -> BoxFuture<'_, ProbeResult> {
         Box::pin(async move {
             Err(crate::error::StorageError::UnsupportedCapability {

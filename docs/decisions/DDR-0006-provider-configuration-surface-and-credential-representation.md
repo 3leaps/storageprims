@@ -203,9 +203,13 @@ That would blur the line between storage access and secrets management, and woul
 
 ## Implementation Notes
 
-- The first version should probably support `default_chain`, profile/config selectors, credential-file paths, and inline static credentials.
+- Provider implementations must reject represented credential modes they do not support during
+  construction, before filesystem or provider I/O. The S3 provider currently rejects
+  `credentials_file` as `InvalidArgument` on `credentials.mode`.
 - Explicit env-map delivery should be designed with redaction and bounded scope in mind.
 - Documentation should distinguish "recommended" auth modes from merely "supported" ones.
+- Diagnostic and probe results expose only the credential-source class, never profile names,
+  credential-file paths, environment-variable names, or inline map contents.
 
 ## Decision Points
 

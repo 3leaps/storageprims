@@ -1,6 +1,7 @@
 //! AWS S3 provider implementation for storageprims.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
@@ -11,27 +12,36 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::error::{DisplayErrorContext, ProvideErrorMetadata};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
-use aws_sdk_sts::error::ProvideErrorMetadata as ProvideStsErrorMetadata;
 use bytes::Bytes;
 use http_body::{Frame, SizeHint};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use storageprims_core::{
     sanitize_endpoint, BoxFuture, BoxedByteStream, Capability, ConflictKind, CopyRequest,
     CopyResult, CopyStrategy, CredentialSource, CredentialSourceKind, GetRangeRequest, ListOptions,
-    ListResult, ObjectMetadata, ObjectSummary, ProbeResult, ProviderConfig, ProviderKind,
-    PutOptions, PutPrecondition, PutResult, Result, StorageError, StorageOperation,
+    ListResult, ObjectMetadata, ObjectSummary, ProbeResult, ProbeScope, ProviderConfig,
+    ProviderKind, PutOptions, PutPrecondition, PutResult, Result, StorageError, StorageOperation,
     StorageProvider, StorageUri,
 };
 use tokio::io::{AsyncRead, ReadBuf};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct S3Provider {
     client: Client,
-    sts_client: aws_sdk_sts::Client,
     bucket: String,
     root_prefix: Option<String>,
     endpoint: Option<String>,
     credential_source: CredentialSourceKind,
+}
+
+impl fmt::Debug for S3Provider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("S3Provider")
+            .field("bucket", &self.bucket)
+            .field("root_prefix", &self.root_prefix)
+            .field("endpoint", &self.endpoint.as_deref().map(sanitize_endpoint))
+            .field("credential_source", &self.credential_source)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,13 +83,7 @@ impl S3Provider {
                 reason: "S3 provider requires a bucket/container".to_string(),
             })?;
 
-        let root_prefix = normalize_prefix(
-            match (config.target.root_prefix.clone(), uri.path.as_str()) {
-                (Some(prefix), _) if !prefix.is_empty() => Some(prefix),
-                (None, path) if !path.is_empty() => Some(path.to_string()),
-                _ => None,
-            },
-        );
+        let root_prefix = resolve_root_prefix(&uri.path, config.target.root_prefix.as_deref())?;
 
         Self::from_parts(bucket, root_prefix, config).await
     }
@@ -113,16 +117,15 @@ impl S3Provider {
         root_prefix: Option<String>,
         config: ProviderConfig,
     ) -> Result<Self> {
+        validate_credential_source(&config.credentials)?;
         let sdk_config = load_sdk_config(&config).await?;
 
         let mut service_config = aws_sdk_s3::config::Builder::from(&sdk_config);
         service_config.set_force_path_style(config.target.force_path_style);
         let client = Client::from_conf(service_config.build());
-        let sts_client = aws_sdk_sts::Client::new(&sdk_config);
 
         Ok(Self {
             client,
-            sts_client,
             bucket,
             root_prefix,
             endpoint: config.target.endpoint.clone(),
@@ -538,26 +541,14 @@ impl StorageProvider for S3Provider {
     }
 
     fn probe(&self) -> BoxFuture<'_, ProbeResult> {
-        Box::pin(async move { self.probe_credentials().await })
+        Box::pin(async move {
+            let started = Instant::now();
+            self.probe_head_bucket(started).await
+        })
     }
 }
 
 impl S3Provider {
-    async fn probe_credentials(&self) -> Result<ProbeResult> {
-        let started = Instant::now();
-
-        match self.sts_client.get_caller_identity().send().await {
-            Ok(_) => Ok(self.probe_result("sts:GetCallerIdentity", started.elapsed())),
-            Err(error) => {
-                if self.endpoint.is_some() && should_fallback_to_head_bucket_probe_error(&error) {
-                    self.probe_head_bucket(started).await
-                } else {
-                    Err(map_sts_probe_error(error))
-                }
-            }
-        }
-    }
-
     async fn probe_head_bucket(&self, started: Instant) -> Result<ProbeResult> {
         self.client
             .head_bucket()
@@ -582,10 +573,36 @@ impl S3Provider {
             provider: ProviderKind::S3,
             endpoint: self.endpoint.as_deref().map(sanitize_endpoint),
             credential_source: self.credential_source.clone(),
+            scope: ProbeScope::ConfiguredContainer,
             probe_method: method.to_string(),
             latency_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
             capabilities: self.capabilities(),
         }
+    }
+}
+
+fn validate_credential_source(credentials: &CredentialSource) -> Result<()> {
+    if matches!(credentials, CredentialSource::CredentialsFile { .. }) {
+        return Err(StorageError::InvalidArgument {
+            operation: Some(StorageOperation::ConfigureProvider),
+            argument: "credentials.mode".to_string(),
+            reason: "credential-file mode is not supported by the S3 provider".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn resolve_root_prefix(uri_path: &str, configured_root: Option<&str>) -> Result<Option<String>> {
+    let uri_root = normalize_prefix(Some(uri_path.to_string()));
+    let configured_root = normalize_prefix(configured_root.map(ToString::to_string));
+
+    match (uri_root, configured_root) {
+        (Some(_), Some(_)) => Err(StorageError::InvalidArgument {
+            operation: Some(StorageOperation::ConfigureProvider),
+            argument: "target.root_prefix".to_string(),
+            reason: "URI path and configured root prefix cannot both be set".to_string(),
+        }),
+        (uri_root, configured_root) => Ok(configured_root.or(uri_root)),
     }
 }
 
@@ -624,13 +641,8 @@ async fn load_sdk_config(config: &ProviderConfig) -> Result<aws_config::SdkConfi
         CredentialSource::Env { variables } => {
             loader.credentials_provider(credentials_from_env(variables)?)
         }
-        CredentialSource::CredentialsFile { path } => {
-            return Err(StorageError::InvalidArgument {
-                operation: Some(StorageOperation::ConfigureProvider),
-                argument: path.clone(),
-                reason: "credential-file resolution is not implemented for the S3 provider yet"
-                    .to_string(),
-            })
+        CredentialSource::CredentialsFile { .. } => {
+            unreachable!("credential-file mode is rejected before SDK configuration")
         }
     };
 
@@ -944,96 +956,6 @@ where
     }
 }
 
-fn map_sts_probe_error<E>(error: aws_sdk_sts::error::SdkError<E>) -> StorageError
-where
-    E: std::error::Error + ProvideStsErrorMetadata + Send + Sync + 'static,
-{
-    use aws_sdk_sts::error::SdkError;
-
-    match error {
-        SdkError::ServiceError(context) => {
-            let err = context.into_err();
-            match err.code().unwrap_or_default() {
-                "InvalidClientTokenId"
-                | "UnrecognizedClientException"
-                | "ExpiredToken"
-                | "SignatureDoesNotMatch" => StorageError::InvalidCredentials {
-                    provider: ProviderKind::S3,
-                    detail: err.code().unwrap_or("sts auth failure").to_string(),
-                },
-                "AccessDenied" | "AccessDeniedException" => StorageError::AccessDenied {
-                    provider: ProviderKind::S3,
-                    operation: StorageOperation::Probe,
-                    target: None,
-                    detail: "access denied".to_string(),
-                },
-                "Throttling" | "ThrottlingException" | "TooManyRequestsException" => {
-                    StorageError::Throttled {
-                        provider: ProviderKind::S3,
-                        operation: StorageOperation::Probe,
-                        retry_after: None,
-                    }
-                }
-                _ => StorageError::Other {
-                    provider: Some(ProviderKind::S3),
-                    operation: Some(StorageOperation::Probe),
-                    detail: format!("{}", DisplayErrorContext(&err)),
-                    source: None,
-                },
-            }
-        }
-        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) | SdkError::ResponseError(_) => {
-            StorageError::ProviderUnavailable {
-                provider: ProviderKind::S3,
-                operation: StorageOperation::Probe,
-                detail: format!("{}", DisplayErrorContext(&error)),
-            }
-        }
-        SdkError::ConstructionFailure(construction_error) => StorageError::InvalidArgument {
-            operation: Some(StorageOperation::Probe),
-            argument: "probe".to_string(),
-            reason: format!("{construction_error:?}"),
-        },
-        other => StorageError::Other {
-            provider: Some(ProviderKind::S3),
-            operation: Some(StorageOperation::Probe),
-            detail: format!("{}", DisplayErrorContext(&other)),
-            source: None,
-        },
-    }
-}
-
-fn should_fallback_to_head_bucket_probe_error<E>(error: &aws_sdk_sts::error::SdkError<E>) -> bool
-where
-    E: std::error::Error + ProvideStsErrorMetadata + Send + Sync + 'static,
-{
-    use aws_sdk_sts::error::SdkError;
-
-    match error {
-        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) | SdkError::ResponseError(_) => {
-            true
-        }
-        SdkError::ServiceError(context) => {
-            let code = context.err().code().unwrap_or_default();
-            let message = context
-                .err()
-                .message()
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-
-            matches!(
-                code,
-                "InternalFailure" | "UnknownOperationException" | "InvalidAction"
-            ) && (message.contains("service 'sts' is not enabled")
-                || message.contains("sts")
-                    && (message.contains("not enabled")
-                        || message.contains("unknown operation")
-                        || message.contains("invalid action")))
-        }
-        _ => false,
-    }
-}
-
 fn parse_retry_after(message: &str) -> Option<Duration> {
     let marker = "retry-after:";
     let lower = message.to_ascii_lowercase();
@@ -1235,7 +1157,6 @@ mod tests {
     use aws_sdk_s3::operation::{
         get_object::GetObjectError, head_object::HeadObjectError, put_object::PutObjectError,
     };
-    use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
     use aws_smithy_runtime_api::http::{Response, StatusCode};
     use aws_smithy_types::body::SdkBody;
     use aws_smithy_types::error::ErrorMetadata;
@@ -1265,13 +1186,6 @@ mod tests {
         let provider = S3Provider {
             client: Client::from_conf(
                 aws_sdk_s3::config::Builder::new()
-                    .behavior_version_latest()
-                    .region(Region::new("us-east-1"))
-                    .credentials_provider(Credentials::from_keys("test", "test", None))
-                    .build(),
-            ),
-            sts_client: aws_sdk_sts::Client::from_conf(
-                aws_sdk_sts::config::Builder::new()
                     .behavior_version_latest()
                     .region(Region::new("us-east-1"))
                     .credentials_provider(Credentials::from_keys("test", "test", None))
@@ -1327,6 +1241,152 @@ mod tests {
         );
         assert_eq!(normalize_prefix(Some("/".to_string())), None);
         assert_eq!(normalize_prefix(None), None);
+    }
+
+    #[test]
+    fn root_prefix_sources_are_normalized_before_ambiguity_check() {
+        for (uri_path, configured_root) in [
+            ("team", Some("team/")),
+            ("team%2Farchive", Some("team/archive")),
+            ("team", Some("/archive/")),
+        ] {
+            let error = resolve_root_prefix(uri_path, configured_root)
+                .expect_err("two nonempty root sources must be rejected");
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+            assert!(matches!(
+                error,
+                StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::ConfigureProvider),
+                    ref argument,
+                    ..
+                } if argument == "target.root_prefix"
+            ));
+            assert!(!display.contains(uri_path));
+            assert!(!debug.contains(uri_path));
+            if let Some(configured_root) = configured_root {
+                assert!(!display.contains(configured_root));
+                assert!(!debug.contains(configured_root));
+            }
+        }
+
+        assert_eq!(
+            resolve_root_prefix("team", Some("/")).unwrap(),
+            Some("team".to_string())
+        );
+        assert_eq!(
+            resolve_root_prefix("", Some("/team/")).unwrap(),
+            Some("team".to_string())
+        );
+        assert_eq!(resolve_root_prefix("", Some("/")).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn from_uri_accepts_exactly_one_normalized_root_source() {
+        for (uri_text, configured_root) in [
+            ("s3://bucket/team", "team/"),
+            ("s3://bucket/team%2Farchive", "team/archive"),
+        ] {
+            let uri = StorageUri::parse(uri_text).unwrap();
+            let error = S3Provider::from_uri(
+                &uri,
+                ProviderConfig {
+                    provider: ProviderKind::S3,
+                    target: TargetConfig {
+                        root_prefix: Some(configured_root.to_string()),
+                        region: Some("us-east-1".to_string()),
+                        ..TargetConfig::default()
+                    },
+                    credentials: CredentialSource::InlineStatic {
+                        values: test_credentials(),
+                    },
+                },
+            )
+            .await
+            .expect_err("two normalized root sources must fail before SDK setup");
+            assert!(matches!(
+                error,
+                StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::ConfigureProvider),
+                    ref argument,
+                    ..
+                } if argument == "target.root_prefix"
+            ));
+            assert!(!error.to_string().contains(uri_text));
+            assert!(!error.to_string().contains(configured_root));
+        }
+
+        let uri = StorageUri::parse("s3://bucket/from-uri/").unwrap();
+        let provider = S3Provider::from_uri(
+            &uri,
+            ProviderConfig {
+                provider: ProviderKind::S3,
+                target: TargetConfig {
+                    root_prefix: Some("/".to_string()),
+                    region: Some("us-east-1".to_string()),
+                    ..TargetConfig::default()
+                },
+                credentials: CredentialSource::InlineStatic {
+                    values: test_credentials(),
+                },
+            },
+        )
+        .await
+        .expect("an empty configured root leaves the URI root unambiguous");
+        assert_eq!(provider.root_prefix(), Some("from-uri"));
+
+        let uri = StorageUri::parse("s3://bucket/").unwrap();
+        let provider = S3Provider::from_uri(
+            &uri,
+            ProviderConfig {
+                provider: ProviderKind::S3,
+                target: TargetConfig {
+                    root_prefix: Some("/from-config/".to_string()),
+                    region: Some("us-east-1".to_string()),
+                    ..TargetConfig::default()
+                },
+                credentials: CredentialSource::InlineStatic {
+                    values: test_credentials(),
+                },
+            },
+        )
+        .await
+        .expect("an empty URI root leaves the configured root unambiguous");
+        assert_eq!(provider.root_prefix(), Some("from-config"));
+    }
+
+    #[tokio::test]
+    async fn credentials_file_is_rejected_at_construction_without_disclosure() {
+        let sentinel = "/credential-file-path-sentinel";
+        let config = ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                region: Some("us-east-1".to_string()),
+                endpoint: Some("http://127.0.0.1:9".to_string()),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::CredentialsFile {
+                path: sentinel.to_string(),
+            },
+        };
+        assert!(!format!("{config:?}").contains(sentinel));
+
+        let error = S3Provider::from_config(config)
+            .await
+            .expect_err("credential-file mode must fail during construction");
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        assert!(matches!(
+            error,
+            StorageError::InvalidArgument {
+                operation: Some(StorageOperation::ConfigureProvider),
+                ref argument,
+                ..
+            } if argument == "credentials.mode"
+        ));
+        assert!(!display.contains(sentinel));
+        assert!(!debug.contains(sentinel));
     }
 
     #[test]
@@ -1412,13 +1472,6 @@ mod tests {
         let provider = S3Provider {
             client: Client::from_conf(
                 aws_sdk_s3::config::Builder::new()
-                    .behavior_version_latest()
-                    .region(Region::new("us-east-1"))
-                    .credentials_provider(Credentials::from_keys("test", "test", None))
-                    .build(),
-            ),
-            sts_client: aws_sdk_sts::Client::from_conf(
-                aws_sdk_sts::config::Builder::new()
                     .behavior_version_latest()
                     .region(Region::new("us-east-1"))
                     .credentials_provider(Credentials::from_keys("test", "test", None))
@@ -1591,50 +1644,10 @@ mod tests {
     }
 
     #[test]
-    fn should_fallback_to_head_bucket_for_disabled_sts_errors_only() {
-        let disabled_sts = aws_sdk_sts::error::SdkError::service_error(
-            GetCallerIdentityError::generic(
-                ErrorMetadata::builder()
-                    .code("InternalFailure")
-                    .message("Service 'sts' is not enabled. Please check your 'SERVICES' configuration variable.")
-                    .build(),
-            ),
-            Response::new(
-                StatusCode::try_from(500).expect("valid status"),
-                SdkBody::empty(),
-            ),
-        );
-        assert!(should_fallback_to_head_bucket_probe_error(&disabled_sts));
-
-        let invalid_credentials = aws_sdk_sts::error::SdkError::service_error(
-            GetCallerIdentityError::generic(
-                ErrorMetadata::builder()
-                    .code("InvalidClientTokenId")
-                    .message("The security token included in the request is invalid.")
-                    .build(),
-            ),
-            Response::new(
-                StatusCode::try_from(403).expect("valid status"),
-                SdkBody::empty(),
-            ),
-        );
-        assert!(!should_fallback_to_head_bucket_probe_error(
-            &invalid_credentials
-        ));
-    }
-
-    #[test]
     fn probe_result_sanitizes_endpoint_and_reports_configured_source() {
         let provider = S3Provider {
             client: Client::from_conf(
                 aws_sdk_s3::config::Builder::new()
-                    .behavior_version_latest()
-                    .region(Region::new("us-east-1"))
-                    .credentials_provider(Credentials::from_keys("test", "test", None))
-                    .build(),
-            ),
-            sts_client: aws_sdk_sts::Client::from_conf(
-                aws_sdk_sts::config::Builder::new()
                     .behavior_version_latest()
                     .region(Region::new("us-east-1"))
                     .credentials_provider(Credentials::from_keys("test", "test", None))
@@ -1652,9 +1665,15 @@ mod tests {
             Some("https://***@example.com:9000")
         );
         assert_eq!(result.credential_source, CredentialSourceKind::InlineStatic);
+        assert_eq!(result.scope, ProbeScope::ConfiguredContainer);
         assert_eq!(result.probe_method, "s3:HeadBucket");
         assert_eq!(result.latency_ms, 17);
         assert!(result.capabilities.contains(&Capability::CredentialProbe));
+
+        let debug = format!("{provider:?}");
+        assert!(!debug.contains("user"));
+        assert!(!debug.contains("pass"));
+        assert!(debug.contains("https://***@example.com:9000"));
     }
 
     #[tokio::test]
@@ -1941,6 +1960,13 @@ mod tests {
             .provide_credentials()
             .await
             .expect("credentials should resolve")
+    }
+
+    fn test_credentials() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("AWS_ACCESS_KEY_ID".to_string(), "test".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "test".to_string()),
+        ])
     }
 
     fn aws_env_lock() -> &'static StdMutex<()> {

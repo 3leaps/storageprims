@@ -10,8 +10,8 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use serde::Deserialize;
 use storageprims_core::{
-    CopyRequest, CredentialSource, CredentialSourceKind, ListOptions, ProbeResult, ProviderConfig,
-    ProviderKind, PutOptions, PutPrecondition, TargetConfig,
+    CopyRequest, CredentialSource, CredentialSourceKind, ListOptions, ProbeResult, ProbeScope,
+    ProviderConfig, ProviderKind, PutOptions, PutPrecondition, TargetConfig,
 };
 use storageprims_ffi::{
     storageprims_clear_error, storageprims_copy, storageprims_count_lines, storageprims_delete,
@@ -292,7 +292,7 @@ fn ffi_line_ops_round_trip_against_localstack() {
 }
 
 #[test]
-fn ffi_probe_uses_head_bucket_fallback_against_localstack() {
+fn ffi_probe_checks_configured_bucket_against_localstack() {
     let endpoint = endpoint();
     let bucket = format!("storageprims-ffi-it-{}", unique_suffix());
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
@@ -308,6 +308,7 @@ fn ffi_probe_uses_head_bucket_fallback_against_localstack() {
     assert_eq!(result.provider, ProviderKind::S3);
     assert_eq!(result.probe_method, "s3:HeadBucket");
     assert_eq!(result.credential_source, CredentialSourceKind::InlineStatic);
+    assert_eq!(result.scope, ProbeScope::ConfiguredContainer);
     assert!(result.latency_ms < 30_000);
     assert_eq!(
         result.capabilities,
@@ -382,6 +383,41 @@ fn ffi_provider_create_reports_json_error_for_invalid_config() {
         .to_string();
     assert!(detail.contains("\"code\":\"invalidargument\""));
     unsafe { storageprims_free_string(detail_ptr) };
+
+    assert_eq!(storageprims_shutdown(handle), StorageprimsErrorCode::Ok);
+}
+
+#[test]
+fn ffi_provider_create_rejects_credentials_file_without_disclosure() {
+    storageprims_clear_error();
+    let handle = storageprims_init();
+    assert!(handle > 0);
+
+    let path_sentinel = "/credential-file-path-sentinel";
+    let endpoint_sentinel = "endpoint-password-sentinel";
+    let config = ProviderConfig {
+        provider: ProviderKind::S3,
+        target: TargetConfig {
+            container: Some("bucket".to_string()),
+            region: Some(TEST_REGION.to_string()),
+            endpoint: Some(format!("https://user:{endpoint_sentinel}@example.com:9000")),
+            ..TargetConfig::default()
+        },
+        credentials: CredentialSource::CredentialsFile {
+            path: path_sentinel.to_string(),
+        },
+    };
+
+    let config = CString::new(serde_json::to_string(&config).unwrap()).unwrap();
+    let mut provider_id = 41_u64;
+    let code = unsafe { storageprims_provider_create(handle, config.as_ptr(), &mut provider_id) };
+    assert_eq!(code, StorageprimsErrorCode::InvalidArgument);
+    assert_eq!(provider_id, 0);
+
+    let detail = last_error_detail();
+    assert!(detail.contains("credentials.mode"));
+    assert!(!detail.contains(path_sentinel));
+    assert!(!detail.contains(endpoint_sentinel));
 
     assert_eq!(storageprims_shutdown(handle), StorageprimsErrorCode::Ok);
 }

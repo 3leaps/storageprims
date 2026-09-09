@@ -23,28 +23,17 @@ impl fmt::Debug for CredentialSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DefaultChain => f.write_str("DefaultChain"),
-            Self::Profile { name } => f.debug_struct("Profile").field("name", name).finish(),
-            Self::CredentialsFile { path } => f
-                .debug_struct("CredentialsFile")
-                .field("path", path)
-                .finish(),
-            Self::InlineStatic { values } => f
-                .debug_struct("InlineStatic")
-                .field("keys", &values.keys().collect::<Vec<_>>())
-                .field("values", &"<redacted>")
-                .finish(),
-            Self::Env { variables } => f.debug_struct("Env").field("variables", variables).finish(),
-            Self::InlineEnvMap { values } => f
-                .debug_struct("InlineEnvMap")
-                .field("keys", &values.keys().collect::<Vec<_>>())
-                .field("values", &"<redacted>")
-                .finish(),
+            Self::Profile { .. } => f.write_str("Profile"),
+            Self::CredentialsFile { .. } => f.write_str("CredentialsFile"),
+            Self::InlineStatic { .. } => f.write_str("InlineStatic"),
+            Self::Env { .. } => f.write_str("Env"),
+            Self::InlineEnvMap { .. } => f.write_str("InlineEnvMap"),
         }
     }
 }
 
 /// Non-secret provider and target configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct TargetConfig {
     pub authority: Option<String>,
     pub container: Option<String>,
@@ -54,6 +43,20 @@ pub struct TargetConfig {
     pub force_path_style: Option<bool>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for TargetConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TargetConfig")
+            .field("authority", &self.authority)
+            .field("container", &self.container)
+            .field("root_prefix", &self.root_prefix)
+            .field("region", &self.region)
+            .field("endpoint", &self.endpoint.as_deref().map(sanitize_endpoint))
+            .field("force_path_style", &self.force_path_style)
+            .field("extra_entries", &self.extra.len())
+            .finish()
+    }
 }
 
 /// Canonical provider configuration passed into provider construction.
@@ -133,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_redacts_inline_credential_values() {
+    fn debug_minimizes_inline_credentials() {
         let mut values = BTreeMap::new();
         values.insert("AWS_ACCESS_KEY_ID".to_string(), "AKIASECRET".to_string());
         values.insert(
@@ -150,22 +153,68 @@ mod tests {
         let debug = format!("{config:?}");
         assert!(!debug.contains("AKIASECRET"));
         assert!(!debug.contains("super-secret-value"));
-        assert!(debug.contains("AWS_ACCESS_KEY_ID"));
-        assert!(debug.contains("AWS_SECRET_ACCESS_KEY"));
-        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("AWS_ACCESS_KEY_ID"));
+        assert!(!debug.contains("AWS_SECRET_ACCESS_KEY"));
+        assert!(debug.contains("InlineStatic"));
     }
 
     #[test]
-    fn debug_redacts_inline_env_map_values() {
+    fn credential_debug_exposes_only_source_class() {
         let mut values = BTreeMap::new();
         values.insert("ACCESS_TOKEN".to_string(), "very-secret-token".to_string());
 
-        let credentials = CredentialSource::InlineEnvMap { values };
-        let debug = format!("{credentials:?}");
+        let cases = [
+            (
+                CredentialSource::Profile {
+                    name: "profile-sentinel".to_string(),
+                },
+                "profile-sentinel",
+            ),
+            (
+                CredentialSource::CredentialsFile {
+                    path: "/credential-file-sentinel".to_string(),
+                },
+                "/credential-file-sentinel",
+            ),
+            (
+                CredentialSource::Env {
+                    variables: vec!["ENV_NAME_SENTINEL".to_string()],
+                },
+                "ENV_NAME_SENTINEL",
+            ),
+            (
+                CredentialSource::InlineStatic {
+                    values: values.clone(),
+                },
+                "ACCESS_TOKEN",
+            ),
+            (CredentialSource::InlineEnvMap { values }, "ACCESS_TOKEN"),
+        ];
 
-        assert!(!debug.contains("very-secret-token"));
-        assert!(debug.contains("ACCESS_TOKEN"));
-        assert!(debug.contains("<redacted>"));
+        for (credentials, sentinel) in cases {
+            let debug = format!("{credentials:?}");
+            assert!(!debug.contains(sentinel));
+            assert!(!debug.contains("very-secret-token"));
+        }
+    }
+
+    #[test]
+    fn provider_config_debug_sanitizes_endpoint_userinfo() {
+        let config = ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                endpoint: Some(
+                    "https://endpoint-user:password-sentinel@example.com:9000".to_string(),
+                ),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::DefaultChain,
+        };
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("endpoint-user"));
+        assert!(!debug.contains("password-sentinel"));
+        assert!(debug.contains("https://***@example.com:9000"));
     }
 
     #[test]

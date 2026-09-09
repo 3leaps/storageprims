@@ -9,8 +9,8 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use storageprims_core::{
     BoxedByteStream, Capability, ConflictKind, CopyRequest, CredentialSource, CredentialSourceKind,
-    GetRangeRequest, ProviderConfig, ProviderKind, PutOptions, PutPrecondition, StorageError,
-    StorageProvider, TargetConfig,
+    GetRangeRequest, ProbeScope, ProviderConfig, ProviderKind, PutOptions, PutPrecondition,
+    StorageError, StorageProvider, TargetConfig,
 };
 use storageprims_s3::S3Provider;
 use tokio::io::AsyncReadExt;
@@ -620,7 +620,7 @@ async fn s3_provider_surfaces_provider_unavailable_for_unreachable_endpoint() {
 }
 
 #[tokio::test]
-async fn s3_provider_probe_uses_head_bucket_fallback_against_localstack() {
+async fn s3_provider_probe_checks_configured_bucket_against_localstack() {
     let test_context = TestContext::new().await;
     let provider = test_context.provider().await;
 
@@ -632,6 +632,7 @@ async fn s3_provider_probe_uses_head_bucket_fallback_against_localstack() {
         Some(test_context.endpoint.as_str())
     );
     assert_eq!(result.credential_source, CredentialSourceKind::InlineStatic);
+    assert_eq!(result.scope, ProbeScope::ConfiguredContainer);
     assert!(result.latency_ms < 30_000);
     assert_eq!(
         result.capabilities,
