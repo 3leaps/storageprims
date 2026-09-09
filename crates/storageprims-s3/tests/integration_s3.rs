@@ -170,6 +170,50 @@ async fn s3_provider_paginates_list_results_against_localstack() {
 }
 
 #[tokio::test]
+async fn s3_provider_contains_rooted_list_to_exact_prefix_segment() {
+    let test_context = TestContext::new().await;
+    let unrooted_provider = test_context.provider().await;
+
+    for key in ["team/x", "team2/x"] {
+        unrooted_provider
+            .put(
+                key,
+                boxed_reader(key),
+                PutOptions {
+                    content_length: Some(key.len() as u64),
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect("seed collision fixture");
+    }
+
+    let rooted_provider = test_context.provider_with_root("team").await;
+    let rooted_list = rooted_provider
+        .list(storageprims_core::ListOptions::default())
+        .await
+        .expect("rooted list succeeds");
+    let rooted_paths = rooted_list
+        .objects
+        .iter()
+        .map(|object| object.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(rooted_paths, vec!["x"]);
+
+    let unrooted_list = unrooted_provider
+        .list(storageprims_core::ListOptions::default())
+        .await
+        .expect("unrooted list succeeds");
+    let unrooted_paths = unrooted_list
+        .objects
+        .iter()
+        .map(|object| object.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(unrooted_paths.contains(&"team/x"));
+    assert!(unrooted_paths.contains(&"team2/x"));
+}
+
+#[tokio::test]
 async fn s3_provider_exercises_range_boundaries_against_localstack() {
     let test_context = TestContext::new().await;
     let provider = test_context.provider().await;
@@ -382,6 +426,14 @@ impl TestContext {
         S3Provider::from_config(self.config())
             .await
             .expect("provider config should be valid")
+    }
+
+    async fn provider_with_root(&self, root_prefix: &str) -> S3Provider {
+        let mut config = self.config();
+        config.target.root_prefix = Some(root_prefix.to_string());
+        S3Provider::from_config(config)
+            .await
+            .expect("rooted provider config should be valid")
     }
 
     fn config(&self) -> ProviderConfig {

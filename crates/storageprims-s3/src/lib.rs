@@ -142,25 +142,6 @@ impl S3Provider {
         Ok(join_key(self.root_prefix.as_deref(), key))
     }
 
-    fn resolve_list_prefix(&self, prefix: Option<&str>) -> Option<String> {
-        match (self.root_prefix.as_deref(), prefix) {
-            (Some(root), Some(prefix)) if !prefix.is_empty() => Some(join_key(Some(root), prefix)),
-            (Some(root), _) => Some(root.to_string()),
-            (None, Some(prefix)) if !prefix.is_empty() => Some(prefix.to_string()),
-            _ => None,
-        }
-    }
-
-    fn strip_root_prefix<'a>(&self, key: &'a str) -> &'a str {
-        match self.root_prefix.as_deref() {
-            Some(root) => key
-                .strip_prefix(root)
-                .unwrap_or(key)
-                .trim_start_matches('/'),
-            None => key,
-        }
-    }
-
     fn resolve_copy_location(&self, value: &str, field: &str) -> Result<S3Location> {
         if value.starts_with("s3://") {
             let uri = StorageUri::parse(value)?;
@@ -259,7 +240,8 @@ impl StorageProvider for S3Provider {
 
     fn list(&self, options: ListOptions) -> BoxFuture<'_, ListResult> {
         Box::pin(async move {
-            let prefix = self.resolve_list_prefix(options.prefix.as_deref());
+            let prefix =
+                resolve_list_prefix(self.root_prefix.as_deref(), options.prefix.as_deref())?;
             let response = self
                 .client
                 .list_objects_v2()
@@ -279,12 +261,19 @@ impl StorageProvider for S3Provider {
                     )
                 })?;
 
+            validate_list_page(
+                self.root_prefix.as_deref(),
+                response.contents().iter().map(|item| item.key()),
+            )?;
+
             let objects = response
                 .contents()
                 .iter()
                 .filter_map(|item| {
                     item.key().map(|key| ObjectSummary {
-                        path: self.strip_root_prefix(key).to_string(),
+                        path: strip_root_prefix(self.root_prefix.as_deref(), key)
+                            .expect("list page was validated before projection")
+                            .to_string(),
                         size: item
                             .size()
                             .and_then(|value| u64::try_from(value).ok())
@@ -907,6 +896,82 @@ fn normalize_prefix(prefix: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn list_root_boundary(root_prefix: Option<&str>) -> Option<String> {
+    root_prefix
+        .filter(|root| !root.is_empty())
+        .map(|root| format!("{root}/"))
+}
+
+fn resolve_list_prefix(
+    root_prefix: Option<&str>,
+    caller_prefix: Option<&str>,
+) -> Result<Option<String>> {
+    if let Some(prefix) = caller_prefix {
+        if prefix.starts_with('/') || starts_with_uri_scheme(prefix) {
+            return Err(StorageError::InvalidArgument {
+                operation: Some(StorageOperation::List),
+                argument: "prefix".to_string(),
+                reason: "list prefix must be provider-relative".to_string(),
+            });
+        }
+    }
+
+    let caller_prefix = caller_prefix.filter(|prefix| !prefix.is_empty());
+    match (list_root_boundary(root_prefix), caller_prefix) {
+        (Some(boundary), Some(prefix)) => Ok(Some(format!("{boundary}{prefix}"))),
+        (Some(boundary), None) => Ok(Some(boundary)),
+        (None, Some(prefix)) => Ok(Some(prefix.to_string())),
+        (None, None) => Ok(None),
+    }
+}
+
+fn starts_with_uri_scheme(value: &str) -> bool {
+    let Some((scheme, _)) = value.split_once("://") else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+        })
+}
+
+fn strip_root_prefix<'a>(root_prefix: Option<&str>, key: &'a str) -> Result<&'a str> {
+    let Some(boundary) = list_root_boundary(root_prefix) else {
+        return Ok(key);
+    };
+
+    key.strip_prefix(&boundary)
+        .ok_or_else(|| StorageError::Other {
+            provider: Some(ProviderKind::S3),
+            operation: Some(StorageOperation::List),
+            detail: "S3 returned an object outside the configured list boundary".to_string(),
+            source: None,
+        })
+}
+
+fn validate_list_page<'a>(
+    root_prefix: Option<&str>,
+    keys: impl IntoIterator<Item = Option<&'a str>>,
+) -> Result<()> {
+    if root_prefix.is_none() {
+        return Ok(());
+    }
+
+    for key in keys {
+        let key = key.ok_or_else(|| StorageError::Other {
+            provider: Some(ProviderKind::S3),
+            operation: Some(StorageOperation::List),
+            detail: "S3 returned a list entry without an object key".to_string(),
+            source: None,
+        })?;
+        strip_root_prefix(root_prefix, key)?;
+    }
+    Ok(())
+}
+
 fn join_key(root_prefix: Option<&str>, key: &str) -> String {
     let key = key.trim_start_matches('/');
     match root_prefix {
@@ -1100,6 +1165,102 @@ mod tests {
         );
         assert_eq!(normalize_prefix(Some("/".to_string())), None);
         assert_eq!(normalize_prefix(None), None);
+    }
+
+    #[test]
+    fn list_prefix_uses_exact_root_segment_boundary() {
+        assert_eq!(
+            resolve_list_prefix(Some("team"), None).unwrap(),
+            Some("team/".to_string())
+        );
+        assert_eq!(
+            resolve_list_prefix(Some("team"), Some("docs/")).unwrap(),
+            Some("team/docs/".to_string())
+        );
+        assert_eq!(
+            resolve_list_prefix(Some("team/a"), None).unwrap(),
+            Some("team/a/".to_string())
+        );
+        assert_eq!(
+            resolve_list_prefix(None, Some("team")).unwrap(),
+            Some("team".to_string())
+        );
+        assert_eq!(resolve_list_prefix(None, None).unwrap(), None);
+        let normalized_root = normalize_prefix(Some("team/".to_string()));
+        assert_eq!(
+            resolve_list_prefix(normalized_root.as_deref(), None).unwrap(),
+            Some("team/".to_string())
+        );
+    }
+
+    #[test]
+    fn list_prefix_rejects_non_relative_values_but_allows_dot_dot() {
+        for root in [Some("team"), None] {
+            for prefix in ["/other", "s3://bucket/key", "https://example.com/key"] {
+                assert!(matches!(
+                    resolve_list_prefix(root, Some(prefix)),
+                    Err(StorageError::InvalidArgument {
+                        operation: Some(StorageOperation::List),
+                        argument,
+                        ..
+                    }) if argument == "prefix"
+                ));
+            }
+        }
+
+        assert_eq!(
+            resolve_list_prefix(Some("team"), Some("../other")).unwrap(),
+            Some("team/../other".to_string())
+        );
+        assert_eq!(
+            resolve_list_prefix(Some("team"), Some("docs/http://archive/")).unwrap(),
+            Some("team/docs/http://archive/".to_string())
+        );
+        assert_eq!(
+            resolve_list_prefix(None, Some("docs/http://archive/")).unwrap(),
+            Some("docs/http://archive/".to_string())
+        );
+    }
+
+    #[test]
+    fn rooted_list_page_fails_closed_on_any_out_of_root_key() {
+        let error = validate_list_page(Some("team"), [Some("team/x"), Some("team2/x")])
+            .expect_err("mixed page must fail");
+        let rendered = error.to_string();
+
+        assert!(matches!(
+            error,
+            StorageError::Other {
+                provider: Some(ProviderKind::S3),
+                operation: Some(StorageOperation::List),
+                ..
+            }
+        ));
+        assert!(!rendered.contains("team2/x"));
+        assert!(!rendered.contains("team/"));
+    }
+
+    #[test]
+    fn rooted_list_page_rejects_key_equal_to_bare_root() {
+        assert!(validate_list_page(Some("team"), [Some("team")]).is_err());
+        assert_eq!(strip_root_prefix(Some("team"), "team/x").unwrap(), "x");
+    }
+
+    #[test]
+    fn nested_rooted_list_page_rejects_sibling_segment_collision() {
+        validate_list_page(Some("team/a"), [Some("team/a/x")]).unwrap();
+        let error = validate_list_page(Some("team/a"), [Some("team/a/x"), Some("team/a2/x")])
+            .expect_err("nested sibling collision must fail");
+        let rendered = error.to_string();
+
+        assert!(!rendered.contains("team/a2/x"));
+        assert!(!rendered.contains("team/a/"));
+    }
+
+    #[test]
+    fn unrooted_list_page_preserves_all_keys() {
+        validate_list_page(None, [Some("team/x"), Some("team2/x")]).unwrap();
+        assert_eq!(strip_root_prefix(None, "team2/x").unwrap(), "team2/x");
     }
 
     #[test]
