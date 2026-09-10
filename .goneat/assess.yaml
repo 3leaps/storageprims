@@ -25,6 +25,7 @@ rust:
     - "**/target/**"
 lint:
   # YAML linting (CI workflows, configs)
+  # .yamlfmt formats at indent 2; .yamllint enforces the same two-space policy.
   yamllint:
     enabled: true
     strict: true

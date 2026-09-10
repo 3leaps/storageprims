@@ -1,0 +1,197 @@
+# Build an unsigned, exact release asset set and open a draft GitHub release.
+# Signing keys remain local to the maintainer MFA ceremony.
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  validate:
+    name: Validate tag and package set
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      version: ${{ steps.release.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust 1.94.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
+        with:
+          toolchain: 1.94.1
+      - name: Bind annotated tag to main
+        id: release
+        env:
+          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+          STORAGEPRIMS_REQUIRE_TAG: '1'
+        run: |
+          set -euo pipefail
+          ./scripts/release-guard-tag-version.sh
+          printf 'commit=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$(cat VERSION)" >>"$GITHUB_OUTPUT"
+      - name: Verify package archives without publishing
+        run: ./scripts/check-packages.sh
+  build-ffi:
+    name: FFI (${{ matrix.platform }})
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-amd64
+            shared: libstorageprims_ffi.so
+          - runner: ubuntu-latest-arm64-s
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64
+            shared: libstorageprims_ffi.so
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+            shared: libstorageprims_ffi.dylib
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust 1.94.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
+        with:
+          toolchain: 1.94.1
+      - name: Verify native runner
+        run: |
+          set -euo pipefail
+          test "$(rustc -vV | awk '/^host:/{print $2}')" = "${{ matrix.target }}"
+      - name: Build native FFI
+        run: cargo build --package storageprims-ffi --release --locked
+      - name: Package exact FFI archive
+        env:
+          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          package_dir="dist/package"
+          archive="storageprims-ffi-${{ needs.validate.outputs.version }}-${{ matrix.platform }}.tar.gz"
+          mkdir -p "$package_dir"
+          cp target/release/libstorageprims_ffi.a "$package_dir/"
+          cp "target/release/${{ matrix.shared }}" "$package_dir/"
+          cp ffi/storageprims-ffi/storageprims.h "$package_dir/storageprims.h"
+          cp LICENSE-MIT LICENSE-APACHE "$package_dir/"
+          tar -czf "$archive" -C "$package_dir" \
+            LICENSE-APACHE LICENSE-MIT libstorageprims_ffi.a \
+            "${{ matrix.shared }}" storageprims.h
+          source scripts/release-common.sh
+          # shellcheck disable=SC2031
+          validate_ffi_archive "$archive"
+      - name: Upload FFI archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: ffi-${{ matrix.platform }}
+          path: storageprims-ffi-${{ needs.validate.outputs.version }}-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+  sbom:
+    name: CycloneDX SBOM
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Generate SBOM with pinned Syft image
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$PWD:/src" \
+            --workdir /src \
+            anchore/syft@sha256:f94e5d9fce1f2278491a8e3a63bd5f6ddb81fdfdbb8bf7a1637565c1d5344357 \
+            dir:. \
+            --output "cyclonedx-json=sbom-${{ needs.validate.outputs.version }}.cdx.json"
+          test -s "sbom-${{ needs.validate.outputs.version }}.cdx.json"
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sbom
+          path: sbom-${{ needs.validate.outputs.version }}.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+  draft:
+    name: Create exact unsigned draft
+    needs: [validate, build-ffi, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download FFI archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: ffi-*
+          path: dist/release
+          merge-multiple: true
+      - name: Download SBOM
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: sbom
+          path: dist/release
+      - name: Assert exact unsigned inventory
+        env:
+          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+          STORAGEPRIMS_REQUIRE_TAG: '1'
+        run: |
+          set -euo pipefail
+          ./scripts/release-guard-tag-version.sh
+          cp LICENSE-MIT LICENSE-APACHE dist/release/
+          ./scripts/validate-release-assets.sh dist/release base
+      - name: Refuse unsafe existing release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/check-draft-release.sh before
+      - name: Create draft GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        with:
+          draft: true
+          prerelease: false
+          target_commitish: ${{ needs.validate.outputs.commit }}
+          body_path: docs/releases/${{ github.ref_name }}.md
+          files: |
+            dist/release/LICENSE-APACHE
+            dist/release/LICENSE-MIT
+            dist/release/sbom-${{ needs.validate.outputs.version }}.cdx.json
+            dist/release/storageprims-ffi-${{ needs.validate.outputs.version }}-darwin-arm64.tar.gz
+            dist/release/storageprims-ffi-${{ needs.validate.outputs.version }}-linux-amd64.tar.gz
+            dist/release/storageprims-ffi-${{ needs.validate.outputs.version }}-linux-arm64.tar.gz
+      - name: Verify exact draft state and remote inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/check-draft-release.sh after

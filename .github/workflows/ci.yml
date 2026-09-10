@@ -52,7 +52,7 @@ jobs:
       - name: YAML and workflow lint
         run: |
           yamllint -c .yamllint .github/workflows .goneat
-          actionlint .github/workflows/ci.yml
+          actionlint .github/workflows/*.yml
       - name: Lint
         run: |
           cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
