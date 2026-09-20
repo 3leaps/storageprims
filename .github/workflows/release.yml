@@ -26,7 +26,8 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           fetch-depth: 0
-          persist-credentials: false
+          # The strict tag guard fetches origin/main in this read-only job.
+          persist-credentials: true
       - name: Install Rust 1.94.1
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
@@ -164,11 +165,20 @@ jobs:
           path: dist/release
       - name: Assert exact unsigned inventory
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
           STORAGEPRIMS_REQUIRE_TAG: '1'
         run: |
           set -euo pipefail
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git config --local http.https://github.com/.extraheader "$auth_header"
+          cleanup_credentials() {
+            git config --local --unset-all http.https://github.com/.extraheader || true
+          }
+          trap cleanup_credentials EXIT
           ./scripts/release-guard-tag-version.sh
+          cleanup_credentials
+          trap - EXIT
           cp LICENSE-MIT LICENSE-APACHE dist/release/
           ./scripts/validate-release-assets.sh dist/release base
       - name: Refuse unsafe existing release state
