@@ -35,3 +35,19 @@ generated headers are stale locally even though narrower Rust-only checks pass.
   jobs and remains the source of truth for branch protection.
 - If `make fmt` or `make cbindgen` changes the tree, those changes should be
   committed before pushing the PR update.
+
+## Release workflow credentials
+
+The tag-triggered release workflow creates the unsigned GitHub draft before the
+local signing ceremony begins. `make release` requires that draft and stops at
+`release-download` when it is absent.
+
+The strict release guard fetches the release tag and `origin/main` to confirm
+their exact relationship. The read-only validation job retains its read-scoped
+checkout credential for that guard. The draft job has a write-scoped token, so
+it provides an authenticated Git header only while running the guard and removes
+that header before later draft steps create or update the release.
+
+After a tag workflow failure, confirm the draft exists and its unsigned asset
+inventory is complete before running `make release`. Repair the workflow and
+recreate the annotated tag only when the failed workflow did not create a draft.

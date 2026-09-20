@@ -165,11 +165,20 @@ jobs:
           path: dist/release
       - name: Assert exact unsigned inventory
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
           STORAGEPRIMS_REQUIRE_TAG: '1'
         run: |
           set -euo pipefail
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git config --local http.https://github.com/.extraheader "$auth_header"
+          cleanup_credentials() {
+            git config --local --unset-all http.https://github.com/.extraheader || true
+          }
+          trap cleanup_credentials EXIT
           ./scripts/release-guard-tag-version.sh
+          cleanup_credentials
+          trap - EXIT
           cp LICENSE-MIT LICENSE-APACHE dist/release/
           ./scripts/validate-release-assets.sh dist/release base
       - name: Refuse unsafe existing release state
