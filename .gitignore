@@ -175,5 +175,7 @@ secrets.yml
 # -----------------------------------------------------------------------------
 # goneat (if used for quality checks)
 # -----------------------------------------------------------------------------
-.goneat/hooks/
+.goneat/hooks/*
+!.goneat/hooks/pre-commit
+!.goneat/hooks/pre-push
 .goneat/*.backup
