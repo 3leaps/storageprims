@@ -10,10 +10,14 @@ pub use config::{sanitize_endpoint, CredentialSource, ProviderConfig, TargetConf
 pub use error::{
     ConflictKind, ProviderKind, Result, StorageError, StorageErrorCode, StorageOperation,
 };
-pub use provider::{BoxFuture, BoxedByteStream, Capability, StorageProvider};
+pub use provider::{
+    require_guarded_reads, BoxFuture, BoxedByteStream, Capability, GuardedReadProvider,
+    StorageProvider,
+};
 pub use types::{
-    CopyRequest, CopyResult, CopyStrategy, CredentialSourceKind, GetRangeRequest, ListOptions,
-    ListResult, ObjectMetadata, ObjectSummary, ProbeResult, ProbeScope, PutOptions,
-    PutPrecondition, PutResult,
+    ByteWindow, CopyRequest, CopyResult, CopyStrategy, CredentialSourceKind, GetRangeRequest,
+    GuardedRangeRequest, GuardedReadResponse, GuardedReadSelection, ListOptions, ListResult,
+    ObjectMetadata, ObjectSummary, ProbeResult, ProbeScope, PutOptions, PutPrecondition, PutResult,
+    SourceObservation, SourceReceipt, SourceSelector,
 };
 pub use uri::StorageUri;

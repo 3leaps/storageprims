@@ -7,8 +7,9 @@ use tokio::io::AsyncRead;
 
 use crate::error::{ProviderKind, Result};
 use crate::types::{
-    CopyRequest, CopyResult, GetRangeRequest, ListOptions, ListResult, ObjectMetadata, ProbeResult,
-    PutOptions, PutResult,
+    CopyRequest, CopyResult, GetRangeRequest, GuardedRangeRequest, GuardedReadResponse,
+    GuardedReadSelection, ListOptions, ListResult, ObjectMetadata, ProbeResult, PutOptions,
+    PutResult, SourceObservation,
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -23,6 +24,49 @@ pub enum Capability {
     CredentialProbe,
     /// Atomic provider-side put preconditions.
     ConditionalPut,
+    /// Source-enforced reads with same-response source receipts.
+    GuardedRead,
+}
+
+/// Optional source-enforced read operations.
+pub trait GuardedReadProvider: Send + Sync {
+    /// A stable, credential-free identity for this configured target.
+    fn guarded_read_target_identity(&self) -> String;
+
+    /// Bind an externally supplied selector to this provider target and key.
+    fn bind_guarded_read(
+        &self,
+        key: &str,
+        selector: crate::types::SourceSelector,
+    ) -> Result<GuardedReadSelection> {
+        GuardedReadSelection::bind(self.guarded_read_target_identity(), key, selector)
+    }
+
+    fn observe_source(&self, key: &str) -> BoxFuture<'_, SourceObservation>;
+
+    fn guarded_head(
+        &self,
+        selection: GuardedReadSelection,
+    ) -> BoxFuture<'_, crate::types::SourceReceipt>;
+
+    fn guarded_get(&self, selection: GuardedReadSelection) -> BoxFuture<'_, GuardedReadResponse>;
+
+    fn guarded_get_range(&self, request: GuardedRangeRequest)
+        -> BoxFuture<'_, GuardedReadResponse>;
+}
+
+/// Return the source-enforced-read extension or the canonical refusal.
+pub fn require_guarded_reads(
+    provider: &dyn StorageProvider,
+    operation: crate::error::StorageOperation,
+) -> Result<&dyn GuardedReadProvider> {
+    provider
+        .guarded_reads()
+        .ok_or(crate::error::StorageError::UnsupportedCapability {
+            provider: provider.provider_kind(),
+            operation,
+            capability: Capability::GuardedRead,
+        })
 }
 
 /// Canonical storage provider trait for v0.1.
@@ -33,6 +77,11 @@ pub trait StorageProvider: Send + Sync {
 
     fn has_capability(&self, capability: Capability) -> bool {
         self.capabilities().contains(&capability)
+    }
+
+    /// Return source-enforced reads when callable from this Rust surface.
+    fn guarded_reads(&self) -> Option<&dyn GuardedReadProvider> {
+        None
     }
 
     fn list(&self, options: ListOptions) -> BoxFuture<'_, ListResult>;
@@ -187,6 +236,24 @@ mod tests {
                 provider: ProviderKind::Local,
                 operation: crate::error::StorageOperation::Probe,
                 capability: Capability::CredentialProbe,
+            }
+        ));
+    }
+
+    #[test]
+    fn external_style_provider_keeps_default_guarded_read_refusal() {
+        let provider: Box<dyn StorageProvider> = Box::new(DummyProvider);
+        assert!(provider.guarded_reads().is_none());
+        let error =
+            match require_guarded_reads(provider.as_ref(), crate::StorageOperation::GuardedGet) {
+                Ok(_) => panic!("default hook must refuse the optional extension"),
+                Err(error) => error,
+            };
+        assert!(matches!(
+            error,
+            crate::StorageError::UnsupportedCapability {
+                capability: Capability::GuardedRead,
+                ..
             }
         ));
     }

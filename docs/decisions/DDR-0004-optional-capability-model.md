@@ -185,6 +185,30 @@ The capability model is accepted with the following amendment:
 - extension traits remain the preferred future Rust shape for advanced optional operations
 - the FFI discovery surface returns only closed capability identifiers and performs no provider I/O
 
+### Guarded-read surface amendment (v0.1.1)
+
+`GuardedRead` is a Rust-only optional capability in the first delivery. It uses
+the object-safe `GuardedReadProvider` extension and the default
+`StorageProvider::guarded_reads()` discovery hook, so existing provider
+implementations remain source-compatible and callers holding `&dyn
+StorageProvider` can receive a canonical `UnsupportedCapability` refusal.
+
+The Rust capability list may contain `guarded_read` only when that hook returns
+`Some`. The existing Unix FFI capability query and FFI-serialized probe result
+must project the list to ABI-callable identifiers and omit `guarded_read` until
+an explicit FFI operation exists. This intentional difference is not an FFI
+feature claim. Adding the Rust enum variant can require downstream exhaustive
+`Capability` matches to add a case.
+
+The extension provides an unguarded observation method and guarded HEAD, GET,
+and range GET. Guarded operations require a bound native-version or
+validator-match selector; observation followed by an unconditional legacy GET
+does not enforce a source selection. A selection binds configured target,
+logical key, selector kind, and opaque token. Credentials are not target
+identity. Receipts report source evidence from the same response as the
+metadata or body and distinguish total object size from requested and returned
+byte windows.
+
 ## References
 
 - `docs/decisions/ADR-0001-canonical-core-contract-and-provider-neutral-surface.md`

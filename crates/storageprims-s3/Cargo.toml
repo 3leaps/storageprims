@@ -19,6 +19,8 @@ integration = []
 aws-config.workspace = true
 aws-credential-types.workspace = true
 aws-sdk-s3.workspace = true
+aws-smithy-runtime-api.workspace = true
+aws-smithy-types.workspace = true
 bytes.workspace = true
 http-body.workspace = true
 percent-encoding.workspace = true
@@ -26,6 +28,4 @@ storageprims-core.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-aws-smithy-runtime-api.workspace = true
-aws-smithy-types.workspace = true
 tokio.workspace = true

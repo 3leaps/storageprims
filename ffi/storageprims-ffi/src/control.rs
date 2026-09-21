@@ -2,8 +2,8 @@ use std::os::raw::c_char;
 
 use serde::Serialize;
 use storageprims_core::{
-    CopyRequest, ListOptions, ObjectMetadata, ProbeResult, ProviderConfig, StorageError,
-    StorageOperation,
+    Capability, CopyRequest, ListOptions, ObjectMetadata, ProbeResult, ProviderConfig,
+    StorageError, StorageOperation,
 };
 use storageprims_ops::{
     count_lines, head_lines_with_options, mid_lines_with_options, tail_lines_with_options,
@@ -24,6 +24,20 @@ struct DeleteResult {
 #[derive(Serialize)]
 struct CountLinesResult {
     count: u64,
+}
+
+fn ffi_capabilities(capabilities: &[Capability]) -> Vec<Capability> {
+    capabilities
+        .iter()
+        .copied()
+        // Guarded reads are callable only from the Rust extension in this cut.
+        .filter(|capability| !matches!(capability, Capability::GuardedRead))
+        .collect()
+}
+
+fn ffi_probe_result(mut result: ProbeResult) -> ProbeResult {
+    result.capabilities = ffi_capabilities(&result.capabilities);
+    result
 }
 
 /// Create a provider instance from JSON configuration and return an opaque provider id.
@@ -105,7 +119,10 @@ pub unsafe extern "C" fn storageprims_provider_capabilities(
         )?;
         let runtime = get_runtime(handle)?;
         let provider = runtime.provider(provider_id)?;
-        write_json(out_capabilities_json, &provider.capabilities())
+        write_json(
+            out_capabilities_json,
+            &ffi_capabilities(&provider.capabilities()),
+        )
     }) {
         Ok(()) => StorageprimsErrorCode::Ok,
         Err(code) => code,
@@ -241,7 +258,7 @@ pub unsafe extern "C" fn storageprims_probe(
         let runtime = get_runtime(handle)?;
         let provider = runtime.provider(provider_id)?;
         let result: ProbeResult = runtime.block_on(provider.probe())?;
-        write_json(out_result_json, &result)
+        write_json(out_result_json, &ffi_probe_result(result))
     }) {
         Ok(()) => StorageprimsErrorCode::Ok,
         Err(code) => code,
@@ -411,5 +428,23 @@ pub unsafe extern "C" fn storageprims_count_lines(
     }) {
         Ok(()) => StorageprimsErrorCode::Ok,
         Err(code) => code,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ffi_capability_projection_omits_rust_only_guarded_reads() {
+        let projected = ffi_capabilities(&[
+            Capability::CredentialProbe,
+            Capability::GuardedRead,
+            Capability::ConditionalPut,
+        ]);
+        assert_eq!(
+            projected,
+            vec![Capability::CredentialProbe, Capability::ConditionalPut]
+        );
     }
 }
