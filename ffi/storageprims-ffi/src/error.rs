@@ -4,7 +4,9 @@ use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use serde::Serialize;
-use storageprims_core::{ConflictKind, StorageError, StorageErrorCode};
+use storageprims_core::{
+    ConflictKind, InspectionKind, InspectionLimitDimension, StorageError, StorageErrorCode,
+};
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -31,6 +33,17 @@ struct ErrorPayload {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     kind: Option<ConflictKind>,
+    /// Additive bounded-inspection detail. Numeric `Other = 99` is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inspection_version: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inspection_kind: Option<InspectionKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit_dimension: Option<InspectionLimitDimension>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    configured_limit: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consumed: Option<u64>,
 }
 
 #[derive(Default)]
@@ -77,6 +90,30 @@ pub(crate) fn set_error(error: &StorageError) -> StorageprimsErrorCode {
             StorageError::Conflict { kind, .. } => Some(*kind),
             _ => None,
         },
+        inspection_version: match error {
+            StorageError::Inspection { .. } => Some(1),
+            _ => None,
+        },
+        inspection_kind: match error {
+            StorageError::Inspection { kind, .. } => Some(*kind),
+            _ => None,
+        },
+        limit_dimension: match error {
+            StorageError::Inspection {
+                limit_dimension, ..
+            } => *limit_dimension,
+            _ => None,
+        },
+        configured_limit: match error {
+            StorageError::Inspection {
+                configured_limit, ..
+            } => Some(*configured_limit),
+            _ => None,
+        },
+        consumed: match error {
+            StorageError::Inspection { consumed, .. } => Some(*consumed),
+            _ => None,
+        },
     };
     let detail_json = serde_json::to_string(&payload).unwrap_or_else(|_| {
         "{\"code\":\"other\",\"message\":\"failed to serialize error\"}".to_string()
@@ -96,6 +133,11 @@ fn set_other_error(message: String) -> StorageprimsErrorCode {
         code: "other".to_string(),
         message,
         kind: None,
+        inspection_version: None,
+        inspection_kind: None,
+        limit_dimension: None,
+        configured_limit: None,
+        consumed: None,
     };
     let detail_json = serde_json::to_string(&payload).unwrap_or_else(|_| {
         "{\"code\":\"other\",\"message\":\"failed to serialize error\"}".to_string()
@@ -164,7 +206,9 @@ pub extern "C" fn storageprims_clear_error() {
 mod tests {
     use std::ffi::CStr;
 
-    use storageprims_core::{ProviderKind, StorageOperation};
+    use storageprims_core::{
+        InspectionKind, InspectionLimitDimension, ProviderKind, StorageOperation,
+    };
 
     use super::*;
 
@@ -222,6 +266,30 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_str(value).expect("valid JSON");
         assert_eq!(payload["code"], "conflict");
         assert_eq!(payload["kind"], "token_mismatch");
+        unsafe { crate::storageprims_free_string(detail) };
+    }
+
+    #[test]
+    fn inspection_error_uses_bounded_versioned_detail_without_selector_data() {
+        let error = StorageError::Inspection {
+            provider: Some(ProviderKind::S3),
+            operation: StorageOperation::PreviewBytes,
+            kind: InspectionKind::LimitExceeded,
+            limit_dimension: Some(InspectionLimitDimension::PayloadBytes),
+            configured_limit: 1024,
+            consumed: 1025,
+        };
+        assert_eq!(set_error(&error), StorageprimsErrorCode::Other);
+        let detail = storageprims_last_error();
+        let value = unsafe { CStr::from_ptr(detail).to_str().expect("valid utf-8") };
+        let payload: serde_json::Value = serde_json::from_str(value).expect("valid JSON");
+        assert_eq!(payload["inspection_version"], 1);
+        assert_eq!(payload["inspection_kind"], "limit_exceeded");
+        assert_eq!(payload["limit_dimension"], "payload_bytes");
+        assert_eq!(payload["configured_limit"], 1024);
+        assert_eq!(payload["consumed"], 1025);
+        assert!(payload.get("selector").is_none());
+        assert!(payload.get("body").is_none());
         unsafe { crate::storageprims_free_string(detail) };
     }
 }

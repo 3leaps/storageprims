@@ -41,6 +41,7 @@ pub enum StorageOperation {
     Probe,
     Get,
     GetRange,
+    PreviewBytes,
     ObserveSource,
     GuardedHead,
     GuardedGet,
@@ -64,6 +65,7 @@ impl std::fmt::Display for StorageOperation {
             Self::Probe => write!(f, "probe"),
             Self::Get => write!(f, "get"),
             Self::GetRange => write!(f, "get_range"),
+            Self::PreviewBytes => write!(f, "preview_bytes"),
             Self::ObserveSource => write!(f, "observe_source"),
             Self::GuardedHead => write!(f, "guarded_head"),
             Self::GuardedGet => write!(f, "guarded_get"),
@@ -101,6 +103,28 @@ pub enum ConflictKind {
     AlreadyExists,
     TokenMismatch,
     Other,
+}
+
+/// Machine-readable category for bounded inspection failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectionKind {
+    LimitExceeded,
+    EncodingRejected,
+}
+
+/// Resource dimension responsible for a bounded inspection failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectionLimitDimension {
+    PayloadBytes,
+    Requests,
+    OutputBytes,
+    PendingLineBytes,
+    LineCount,
+    ChunkSize,
+    ProbeSize,
+    Deadline,
 }
 
 /// Canonical error type for all storageprims operations.
@@ -175,6 +199,16 @@ pub enum StorageError {
         detail: String,
     },
 
+    #[error("{operation}: bounded inspection {kind:?} ({limit_dimension:?})")]
+    Inspection {
+        provider: Option<ProviderKind>,
+        operation: StorageOperation,
+        kind: InspectionKind,
+        limit_dimension: Option<InspectionLimitDimension>,
+        configured_limit: u64,
+        consumed: u64,
+    },
+
     #[error("I/O error during {operation:?}: {source}")]
     Io {
         operation: Option<StorageOperation>,
@@ -211,6 +245,9 @@ impl From<&StorageError> for StorageErrorCode {
             StorageError::ProviderUnavailable { .. } => Self::ProviderUnavailable,
             StorageError::UnsupportedCapability { .. } => Self::UnsupportedCapability,
             StorageError::Conflict { .. } => Self::Conflict,
+            // The Unix ABI keeps its established numeric Other=99 code while
+            // projecting this variant through bounded structured error JSON.
+            StorageError::Inspection { .. } => Self::Other,
             StorageError::Io { .. } => Self::Io,
             StorageError::Other { .. } => Self::Other,
         }

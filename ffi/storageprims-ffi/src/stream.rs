@@ -3,7 +3,10 @@ use std::os::raw::c_char;
 
 use os_pipe::pipe;
 use serde::Serialize;
-use storageprims_core::{GetRangeRequest, PutOptions, StorageError, StorageOperation};
+use storageprims_core::{
+    require_guarded_reads, Capability, GuardedRangeRequest, PutOptions, SourceSelector,
+    StorageError, StorageOperation,
+};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
@@ -153,6 +156,12 @@ pub unsafe extern "C" fn storageprims_get(
 /// `storageprims_free_string`. The returned fd is backed by a bounded OS pipe,
 /// so callers should keep draining it; otherwise the provider worker may block
 /// under backpressure until the fd is drained or closed.
+///
+/// The range uses an internal source-guarded observation and selected range
+/// request. A range proven clipped at object EOF finalizes successfully with
+/// its returned length; an ignored range, wrong window, or transport truncation
+/// remains an error. Providers that cannot enforce a guarded selection return
+/// `UnsupportedCapability` rather than exposing unvalidated current bytes.
 #[no_mangle]
 pub unsafe extern "C" fn storageprims_get_range(
     handle: u64,
@@ -171,16 +180,53 @@ pub unsafe extern "C" fn storageprims_get_range(
         let runtime = get_runtime(handle)?;
         let provider = runtime.provider(provider_id)?;
         let key = parse_cstr(key, "key")?;
+        if length == 0 || offset.checked_add(length - 1).is_none() {
+            return Err(StorageError::InvalidArgument {
+                operation: Some(StorageOperation::GetRange),
+                argument: "offset/length".to_string(),
+                reason: "range must be non-empty and must not overflow".to_string(),
+            });
+        }
         let (reader, writer) = pipe().map_err(|error| StorageError::Io {
             operation: Some(StorageOperation::GetRange),
             source: error,
         })?;
 
-        let provider_stream = runtime.block_on(provider.get_range(GetRangeRequest {
-            key,
+        // The Unix data-plane ABI does not expose selectors, but its range
+        // finalization must still distinguish a proven EOF clip from a
+        // truncated or ignored range. Bind and consume one guarded selection
+        // internally rather than accepting arbitrary short current-object data.
+        let guarded = require_guarded_reads(provider.as_ref(), StorageOperation::GetRange)?;
+        let observation = runtime.block_on(guarded.observe_source(&key))?;
+        let selector = if let Some(token) = observation.receipt.native_version {
+            SourceSelector::NativeVersion { token }
+        } else if let Some(token) = observation.receipt.validator {
+            SourceSelector::ValidatorMatch { token }
+        } else {
+            return Err(StorageError::UnsupportedCapability {
+                provider: provider.provider_kind(),
+                operation: StorageOperation::GetRange,
+                capability: Capability::GuardedRead,
+            });
+        };
+        let selection = guarded.bind_guarded_read(&key, selector)?;
+        let response = runtime.block_on(guarded.guarded_get_range(GuardedRangeRequest {
+            selection,
             offset,
             length,
         }))?;
+        let expected_bytes = response
+            .receipt
+            .returned_window
+            .and_then(|window| window.checked_len())
+            .ok_or_else(|| StorageError::Io {
+                operation: Some(StorageOperation::GetRange),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "guarded range response is missing a valid returned window",
+                ),
+            })?;
+        let provider_stream = response.reader;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let stream_id = runtime.insert_stream(StreamState::PendingRead {
             receiver: rx,
@@ -203,7 +249,7 @@ pub unsafe extern "C" fn storageprims_get_range(
                 provider_stream,
                 writer,
                 StorageOperation::GetRange,
-                Some(length),
+                Some(expected_bytes),
             )
             .await;
             let _ = tx.send(result);

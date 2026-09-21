@@ -20,5 +20,6 @@ tokio.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
+storageprims-s3.workspace = true
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["io"] }
