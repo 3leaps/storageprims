@@ -15,6 +15,7 @@ storageprims.
 | DDR-0004 | Design   | [Optional Capability Model](DDR-0004-optional-capability-model.md)                                                                           | Accepted-as-amended | 2026-03-16 |
 | DDR-0008 | Design   | [Source-Guarded Read Contract](DDR-0008-source-guarded-read-contract.md)                                                                     | Accepted            | 2026-09-21 |
 | DDR-0009 | Design   | [Bounded Inspection Contract](DDR-0009-bounded-inspection-contract.md)                                                                       | Accepted            | 2026-09-21 |
+| DDR-0010 | Design   | [Delimiter Listing Contract](DDR-0010-delimiter-listing-contract.md)                                                                         | Accepted            | 2026-09-21 |
 | DDR-0005 | Design   | [Copy Semantics Across Same-Provider and Cross-Provider Targets](DDR-0005-copy-semantics-across-same-provider-and-cross-provider-targets.md) | Approved            | 2026-03-16 |
 | DDR-0006 | Design   | [Provider Configuration Surface and Credential Representation](DDR-0006-provider-configuration-surface-and-credential-representation.md)     | Proposed            | 2026-03-16 |
 | DDR-0007 | Design   | [Binary-First Remote Text Inspection and Helper Boundary](DDR-0007-binary-first-remote-text-inspection-and-helper-boundary.md)               | Approved            | 2026-03-16 |
@@ -34,7 +35,7 @@ storageprims.
 | Rust workspace      | Core contracts, line-oriented operations, and S3 provider implemented                                          |
 | FFI                 | C ABI implemented on Unix/POSIX; Windows FFI planned                                                           |
 | Bindings and CLI    | Go, TypeScript, and CLI planned                                                                                |
-| Optional operations | Conditional put implemented; delimiter listing and multipart upload planned                                    |
+| Optional operations | Conditional put, guarded read, and Rust delimiter listing implemented; multipart upload planned                |
 | Error detail        | Canonical classes and coarse FFI codes/messages implemented; structured FFI provider/operation context planned |
 
 ## Near-Term Activity Map

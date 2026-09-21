@@ -9,8 +9,8 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use storageprims_core::{
     BoxedByteStream, Capability, ConflictKind, CopyRequest, CredentialSource, CredentialSourceKind,
-    GetRangeRequest, ProbeScope, ProviderConfig, ProviderKind, PutOptions, PutPrecondition,
-    StorageError, StorageProvider, TargetConfig,
+    DelimiterListRequest, GetRangeRequest, ProbeScope, ProviderConfig, ProviderKind, PutOptions,
+    PutPrecondition, StorageError, StorageProvider, TargetConfig,
 };
 use storageprims_s3::S3Provider;
 use tokio::io::AsyncReadExt;
@@ -336,6 +336,72 @@ async fn s3_provider_paginates_list_results_against_localstack() {
 }
 
 #[tokio::test]
+async fn s3_provider_lists_one_native_delimiter_page_and_continuation() {
+    let test_context = TestContext::new().await;
+    let unrooted = test_context.provider().await;
+
+    for key in ["team/root.txt", "team/docs/a.txt", "team/images/b.png"] {
+        unrooted
+            .put(
+                key,
+                boxed_reader(key),
+                PutOptions {
+                    content_length: Some(key.len() as u64),
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect("seed delimiter-listing fixture");
+    }
+
+    let provider = test_context.provider_with_root("team").await;
+    assert!(provider.has_capability(Capability::DelimiterListing));
+    let extension = provider
+        .delimiter_lists()
+        .expect("S3 exposes callable delimiter listing");
+    let mixed = extension
+        .list_delimited(DelimiterListRequest {
+            prefix: None,
+            delimiter: "/".to_string(),
+            continuation_token: None,
+            max_keys: Some(100),
+        })
+        .await
+        .expect("mixed delimiter page succeeds");
+    assert_eq!(
+        mixed
+            .objects
+            .iter()
+            .map(|object| object.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["root.txt"]
+    );
+    assert_eq!(mixed.common_prefixes, vec!["docs/", "images/"]);
+
+    let first = extension
+        .list_delimited(DelimiterListRequest {
+            prefix: None,
+            delimiter: "/".to_string(),
+            continuation_token: None,
+            max_keys: Some(1),
+        })
+        .await
+        .expect("first bounded delimiter page succeeds");
+    assert_eq!(first.objects.len() + first.common_prefixes.len(), 1);
+    assert!(first.is_truncated);
+    let second = extension
+        .list_delimited(DelimiterListRequest {
+            prefix: None,
+            delimiter: "/".to_string(),
+            continuation_token: first.continuation_token,
+            max_keys: Some(1),
+        })
+        .await
+        .expect("delimiter continuation succeeds");
+    assert_eq!(second.objects.len() + second.common_prefixes.len(), 1);
+}
+
+#[tokio::test]
 async fn s3_provider_omits_zero_max_keys_and_rejects_overflow_before_transport() {
     let test_context = TestContext::new().await;
     let provider = test_context.provider().await;
@@ -637,6 +703,7 @@ async fn s3_provider_probe_checks_configured_bucket_against_localstack() {
     assert_eq!(
         result.capabilities,
         vec![
+            Capability::DelimiterListing,
             Capability::CredentialProbe,
             Capability::ConditionalPut,
             Capability::GuardedRead,

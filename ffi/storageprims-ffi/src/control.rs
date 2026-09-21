@@ -30,8 +30,13 @@ fn ffi_capabilities(capabilities: &[Capability]) -> Vec<Capability> {
     capabilities
         .iter()
         .copied()
-        // Guarded reads are callable only from the Rust extension in this cut.
-        .filter(|capability| !matches!(capability, Capability::GuardedRead))
+        // These operations are callable only from Rust extensions in this cut.
+        .filter(|capability| {
+            !matches!(
+                capability,
+                Capability::GuardedRead | Capability::DelimiterListing
+            )
+        })
         .collect()
 }
 
@@ -434,17 +439,33 @@ pub unsafe extern "C" fn storageprims_count_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use storageprims_core::{CredentialSourceKind, ProbeScope, ProviderKind};
 
     #[test]
-    fn ffi_capability_projection_omits_rust_only_guarded_reads() {
+    fn ffi_capability_projection_omits_rust_only_extensions() {
         let projected = ffi_capabilities(&[
             Capability::CredentialProbe,
             Capability::GuardedRead,
+            Capability::DelimiterListing,
             Capability::ConditionalPut,
         ]);
         assert_eq!(
             projected,
             vec![Capability::CredentialProbe, Capability::ConditionalPut]
         );
+    }
+
+    #[test]
+    fn ffi_probe_projection_omits_delimiter_listing() {
+        let projected = ffi_probe_result(ProbeResult {
+            provider: ProviderKind::S3,
+            endpoint: None,
+            credential_source: CredentialSourceKind::DefaultChain,
+            scope: ProbeScope::ConfiguredContainer,
+            probe_method: "test".to_string(),
+            latency_ms: 0,
+            capabilities: vec![Capability::DelimiterListing, Capability::CredentialProbe],
+        });
+        assert_eq!(projected.capabilities, vec![Capability::CredentialProbe]);
     }
 }

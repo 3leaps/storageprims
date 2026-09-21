@@ -1,6 +1,6 @@
 //! AWS S3 provider implementation for storageprims.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,8 @@ use http_body::{Frame, SizeHint};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use storageprims_core::{
     sanitize_endpoint, BoxFuture, BoxedByteStream, ByteWindow, Capability, ConflictKind,
-    CopyRequest, CopyResult, CopyStrategy, CredentialSource, CredentialSourceKind, GetRangeRequest,
+    CopyRequest, CopyResult, CopyStrategy, CredentialSource, CredentialSourceKind,
+    DelimiterListRequest, DelimiterListResult, DelimiterListingProvider, GetRangeRequest,
     GuardedRangeRequest, GuardedReadProvider, GuardedReadResponse, GuardedReadSelection,
     ListOptions, ListResult, ObjectMetadata, ObjectSummary, ProbeResult, ProbeScope,
     ProviderConfig, ProviderKind, PutOptions, PutPrecondition, PutResult, Result,
@@ -31,6 +32,8 @@ use storageprims_core::{
     StorageProvider, StorageUri,
 };
 use tokio::io::{AsyncRead, ReadBuf};
+
+const S3_DEFAULT_MAX_KEYS: u32 = 1_000;
 
 #[derive(Clone)]
 pub struct S3Provider {
@@ -305,6 +308,7 @@ impl StorageProvider for S3Provider {
 
     fn capabilities(&self) -> Vec<Capability> {
         vec![
+            Capability::DelimiterListing,
             Capability::CredentialProbe,
             Capability::ConditionalPut,
             Capability::GuardedRead,
@@ -312,6 +316,10 @@ impl StorageProvider for S3Provider {
     }
 
     fn guarded_reads(&self) -> Option<&dyn GuardedReadProvider> {
+        Some(self)
+    }
+
+    fn delimiter_lists(&self) -> Option<&dyn DelimiterListingProvider> {
         Some(self)
     }
 
@@ -614,6 +622,84 @@ impl StorageProvider for S3Provider {
         Box::pin(async move {
             let started = Instant::now();
             self.probe_head_bucket(started).await
+        })
+    }
+}
+
+impl DelimiterListingProvider for S3Provider {
+    fn list_delimited(&self, request: DelimiterListRequest) -> BoxFuture<'_, DelimiterListResult> {
+        Box::pin(async move {
+            validate_delimiter(&request.delimiter)?;
+            validate_continuation_token(request.continuation_token.as_deref())?;
+            let caller_prefix = request.prefix.as_deref().unwrap_or("").to_string();
+            let prefix =
+                resolve_list_prefix(self.root_prefix.as_deref(), request.prefix.as_deref())?;
+            let max_keys = normalize_max_keys(request.max_keys)?;
+            let has_continuation = request.continuation_token.is_some();
+            let response = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .set_prefix(prefix)
+                .delimiter(request.delimiter)
+                .set_continuation_token(request.continuation_token)
+                .set_max_keys(max_keys)
+                .send()
+                .await
+                .map_err(|error| map_delimiter_list_error(error, has_continuation))?;
+
+            let is_truncated = response.is_truncated().ok_or_else(|| {
+                invalid_delimiter_page("S3 returned a delimiter page without a truncation flag")
+            })?;
+
+            validate_delimiter_list_page(
+                self.root_prefix.as_deref(),
+                &caller_prefix,
+                request.max_keys.filter(|value| *value != 0),
+                response.contents().iter().map(|item| item.key()),
+                response.common_prefixes().iter().map(|item| item.prefix()),
+                is_truncated,
+                response.next_continuation_token(),
+            )?;
+
+            let objects = response
+                .contents()
+                .iter()
+                .map(|item| {
+                    let key = item.key().expect("delimiter page was validated");
+                    ObjectSummary {
+                        path: strip_root_prefix(self.root_prefix.as_deref(), key)
+                            .expect("delimiter page was validated")
+                            .to_string(),
+                        size: item
+                            .size()
+                            .and_then(|value| u64::try_from(value).ok())
+                            .unwrap_or(0),
+                        etag: item.e_tag().map(ToString::to_string),
+                        content_type: None,
+                        last_modified: item.last_modified().map(|value| value.to_string()),
+                    }
+                })
+                .collect();
+            let common_prefixes = response
+                .common_prefixes()
+                .iter()
+                .map(|item| {
+                    strip_root_prefix(
+                        self.root_prefix.as_deref(),
+                        item.prefix().expect("delimiter page was validated"),
+                    )
+                    .expect("delimiter page was validated")
+                    .to_string()
+                })
+                .collect();
+
+            Ok(DelimiterListResult {
+                objects,
+                common_prefixes,
+                continuation_token: response.next_continuation_token().map(ToString::to_string),
+                is_truncated,
+            })
         })
     }
 }
@@ -980,6 +1066,40 @@ fn normalize_max_keys(max_keys: Option<u32>) -> Result<Option<i32>> {
                 reason: "value exceeds the S3 request limit".to_string(),
             }),
     }
+}
+
+fn delimiter_page_bound(max_keys: Option<u32>) -> u32 {
+    match max_keys {
+        None | Some(0) => S3_DEFAULT_MAX_KEYS,
+        Some(value) => value,
+    }
+}
+
+fn validate_delimiter(delimiter: &str) -> Result<()> {
+    let bytes = delimiter.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > 1024
+        || bytes.iter().any(|byte| *byte <= 0x1f || *byte == 0x7f)
+    {
+        return Err(StorageError::InvalidArgument {
+            operation: Some(StorageOperation::List),
+            argument: "delimiter".to_string(),
+            reason: "delimiter must be 1..=1024 bytes and contain no control characters"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_continuation_token(token: Option<&str>) -> Result<()> {
+    if token.is_some_and(|value| value.is_empty() || value.len() > 8192) {
+        return Err(StorageError::InvalidArgument {
+            operation: Some(StorageOperation::List),
+            argument: "continuation_token".to_string(),
+            reason: "continuation token must be 1..=8192 bytes when present".to_string(),
+        });
+    }
+    Ok(())
 }
 
 async fn load_sdk_config(config: &ProviderConfig) -> Result<aws_config::SdkConfig> {
@@ -1666,6 +1786,31 @@ where
     }
 }
 
+fn map_delimiter_list_error<E>(
+    error: aws_sdk_s3::error::SdkError<E>,
+    has_continuation: bool,
+) -> StorageError
+where
+    E: std::error::Error + ProvideErrorMetadata + Send + Sync + 'static,
+{
+    if has_continuation
+        && error
+            .as_service_error()
+            .and_then(ProvideErrorMetadata::code)
+            .is_some_and(|code| {
+                matches!(code, "InvalidArgument" | "InvalidRequest" | "InvalidToken")
+            })
+    {
+        return StorageError::InvalidArgument {
+            operation: Some(StorageOperation::List),
+            argument: "continuation_token".to_string(),
+            reason: "provider rejected the continuation token".to_string(),
+        };
+    }
+
+    map_sdk_error(ProviderKind::S3, StorageOperation::List, None, None, error)
+}
+
 fn parse_retry_after_value(value: &str) -> Option<Duration> {
     value
         .split(|c: char| !c.is_ascii_digit())
@@ -1753,6 +1898,92 @@ fn validate_list_page<'a>(
         })?;
         strip_root_prefix(root_prefix, key)?;
     }
+    Ok(())
+}
+
+fn invalid_delimiter_page(detail: &str) -> StorageError {
+    StorageError::Other {
+        provider: Some(ProviderKind::S3),
+        operation: Some(StorageOperation::List),
+        detail: detail.to_string(),
+        source: None,
+    }
+}
+
+fn validate_delimiter_list_page<'a>(
+    root_prefix: Option<&str>,
+    caller_prefix: &str,
+    max_keys: Option<u32>,
+    object_keys: impl IntoIterator<Item = Option<&'a str>>,
+    common_prefixes: impl IntoIterator<Item = Option<&'a str>>,
+    is_truncated: bool,
+    continuation_token: Option<&str>,
+) -> Result<()> {
+    if is_truncated != continuation_token.is_some() {
+        return Err(invalid_delimiter_page(
+            "S3 returned an inconsistent delimiter-listing continuation pair",
+        ));
+    }
+    if continuation_token.is_some_and(|token| token.is_empty() || token.len() > 8192) {
+        return Err(invalid_delimiter_page(
+            "S3 returned an invalid delimiter-listing continuation token",
+        ));
+    }
+
+    let page_bound = delimiter_page_bound(max_keys) as usize;
+    let mut row_count = 0_usize;
+    let mut projected_objects = HashSet::new();
+    for key in object_keys {
+        row_count = row_count
+            .checked_add(1)
+            .ok_or_else(|| invalid_delimiter_page("S3 returned an oversized delimiter page"))?;
+        if row_count > page_bound {
+            return Err(invalid_delimiter_page(
+                "S3 returned more delimiter-page rows than requested",
+            ));
+        }
+        let key = key.ok_or_else(|| {
+            invalid_delimiter_page("S3 returned a delimiter page entry without an object key")
+        })?;
+        let projected = strip_root_prefix(root_prefix, key)?;
+        if !projected.starts_with(caller_prefix) {
+            return Err(invalid_delimiter_page(
+                "S3 returned an object outside the requested delimiter prefix",
+            ));
+        }
+        projected_objects.insert(projected);
+    }
+
+    for prefix in common_prefixes {
+        row_count = row_count
+            .checked_add(1)
+            .ok_or_else(|| invalid_delimiter_page("S3 returned an oversized delimiter page"))?;
+        if row_count > page_bound {
+            return Err(invalid_delimiter_page(
+                "S3 returned more delimiter-page rows than requested",
+            ));
+        }
+        let prefix = prefix.ok_or_else(|| {
+            invalid_delimiter_page("S3 returned a delimiter page entry without a common prefix")
+        })?;
+        let projected = strip_root_prefix(root_prefix, prefix)?;
+        if projected.is_empty() {
+            return Err(invalid_delimiter_page(
+                "S3 returned an empty projected common prefix",
+            ));
+        }
+        if !projected.starts_with(caller_prefix) {
+            return Err(invalid_delimiter_page(
+                "S3 returned a common prefix outside the requested delimiter prefix",
+            ));
+        }
+        if projected_objects.contains(projected) {
+            return Err(invalid_delimiter_page(
+                "S3 returned the same path as an object and common prefix",
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -1873,12 +2104,13 @@ mod tests {
     use tokio::net::TcpListener;
 
     async fn scripted_response_server(
-        response: &'static str,
+        response: impl Into<String>,
     ) -> (String, tokio::task::JoinHandle<Vec<u8>>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("scripted server binds");
         let address = listener.local_addr().expect("scripted server has address");
+        let response = response.into();
         let task = tokio::spawn(async move {
             let (mut socket, _) = listener
                 .accept()
@@ -1907,6 +2139,43 @@ mod tests {
 
     async fn scripted_responses_server(
         responses: &'static [&'static str],
+    ) -> (String, tokio::task::JoinHandle<Vec<Vec<u8>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("scripted server binds");
+        let address = listener.local_addr().expect("scripted server has address");
+        let task = tokio::spawn(async move {
+            let mut requests = Vec::with_capacity(responses.len());
+            for response in responses {
+                let (mut socket, _) = listener
+                    .accept()
+                    .await
+                    .expect("scripted server accepts request");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 2048];
+                loop {
+                    let read = socket.read(&mut buffer).await.expect("request reads");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("response writes");
+                requests.push(request);
+            }
+            requests
+        });
+        (format!("http://{address}"), task)
+    }
+
+    async fn scripted_owned_responses_server(
+        responses: Vec<String>,
     ) -> (String, tokio::task::JoinHandle<Vec<Vec<u8>>>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -2288,6 +2557,7 @@ mod tests {
         assert_eq!(
             provider.capabilities(),
             vec![
+                Capability::DelimiterListing,
                 Capability::CredentialProbe,
                 Capability::ConditionalPut,
                 Capability::GuardedRead,
@@ -2295,6 +2565,7 @@ mod tests {
         );
         assert!(provider.guarded_reads().is_some());
         let provider_dyn: &dyn StorageProvider = &provider;
+        assert!(storageprims_core::require_delimiter_listing(provider_dyn).is_ok());
         let guarded =
             storageprims_core::require_guarded_reads(provider_dyn, StorageOperation::GuardedGet)
                 .expect("S3 guarded reads are callable through a trait object");
@@ -2348,6 +2619,397 @@ mod tests {
     fn unrooted_list_page_preserves_all_keys() {
         validate_list_page(None, [Some("team/x"), Some("team2/x")]).unwrap();
         assert_eq!(strip_root_prefix(None, "team2/x").unwrap(), "team2/x");
+    }
+
+    #[test]
+    fn delimiter_and_token_admission_enforce_frozen_bounds() {
+        for delimiter in ["/", ".", "..", "🦀", &"x".repeat(1024)] {
+            validate_delimiter(delimiter).expect("admitted delimiter");
+        }
+        for delimiter in [
+            "".to_string(),
+            "x".repeat(1025),
+            "a\nb".to_string(),
+            "\u{7f}".to_string(),
+        ] {
+            let error = validate_delimiter(&delimiter).expect_err("invalid delimiter");
+            assert!(matches!(
+                error,
+                StorageError::InvalidArgument { ref argument, .. } if argument == "delimiter"
+            ));
+            if !delimiter.is_empty() {
+                assert!(!error.to_string().contains(&delimiter));
+            }
+        }
+
+        validate_continuation_token(None).unwrap();
+        validate_continuation_token(Some(&"t".repeat(8192))).unwrap();
+        for token in ["".to_string(), "t".repeat(8193)] {
+            let error = validate_continuation_token(Some(&token)).expect_err("invalid token");
+            assert!(matches!(
+                error,
+                StorageError::InvalidArgument { ref argument, .. }
+                    if argument == "continuation_token"
+            ));
+            if !token.is_empty() {
+                assert!(!error.to_string().contains(&token));
+            }
+        }
+    }
+
+    #[test]
+    fn delimiter_page_accepts_mixed_and_common_prefix_only_pages() {
+        validate_delimiter_list_page(
+            Some("team"),
+            "docs/",
+            Some(3),
+            [Some("team/docs/marker/"), Some("team/docs/é%25.txt")],
+            [Some("team/docs/sub/")],
+            false,
+            None,
+        )
+        .expect("literal mixed page is valid");
+        validate_delimiter_list_page(
+            Some("team"),
+            "",
+            Some(1),
+            std::iter::empty(),
+            [Some("team/docs|")],
+            true,
+            Some("opaque"),
+        )
+        .expect("common-prefix-only page is valid");
+    }
+
+    #[test]
+    fn delimiter_page_rejects_malformed_rows_whole_page() {
+        let failures = [
+            validate_delimiter_list_page(
+                Some("team"),
+                "",
+                None,
+                [None],
+                std::iter::empty(),
+                false,
+                None,
+            ),
+            validate_delimiter_list_page(
+                Some("team"),
+                "",
+                None,
+                [Some("team-other/x")],
+                std::iter::empty(),
+                false,
+                None,
+            ),
+            validate_delimiter_list_page(
+                Some("team"),
+                "docs/",
+                None,
+                [Some("team/images/x")],
+                std::iter::empty(),
+                false,
+                None,
+            ),
+            validate_delimiter_list_page(
+                Some("team"),
+                "",
+                None,
+                std::iter::empty(),
+                [None],
+                false,
+                None,
+            ),
+            validate_delimiter_list_page(
+                Some("team"),
+                "",
+                None,
+                std::iter::empty(),
+                [Some("team/")],
+                false,
+                None,
+            ),
+            validate_delimiter_list_page(
+                Some("team"),
+                "",
+                None,
+                [Some("team/docs/")],
+                [Some("team/docs/")],
+                false,
+                None,
+            ),
+            validate_delimiter_list_page(
+                Some("team"),
+                "",
+                Some(1),
+                [Some("team/a")],
+                [Some("team/b/")],
+                false,
+                None,
+            ),
+            validate_delimiter_list_page(
+                Some("team"),
+                "",
+                None,
+                std::iter::empty(),
+                std::iter::empty(),
+                true,
+                None,
+            ),
+            validate_delimiter_list_page(
+                Some("team"),
+                "",
+                None,
+                std::iter::empty(),
+                std::iter::empty(),
+                false,
+                Some("token"),
+            ),
+        ];
+        for failure in failures {
+            assert!(matches!(
+                failure,
+                Err(StorageError::Other {
+                    provider: Some(ProviderKind::S3),
+                    operation: Some(StorageOperation::List),
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn delimiter_page_enforces_default_bound_for_omitted_and_zero_max_keys() {
+        for max_keys in [None, Some(0)] {
+            let error = validate_delimiter_list_page(
+                Some("team"),
+                "",
+                max_keys,
+                std::iter::repeat_n(Some("team/repeated"), 1_001),
+                std::iter::empty(),
+                false,
+                None,
+            )
+            .expect_err("default S3 page bound must be enforced after parse");
+            assert!(matches!(error, StorageError::Other { .. }));
+        }
+    }
+
+    fn list_bucket_response(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn delimiter_page_response(is_truncated: bool, token: Option<&str>) -> String {
+        let token = token
+            .map(|value| format!("<NextContinuationToken>{value}</NextContinuationToken>"))
+            .unwrap_or_default();
+        let body = format!(
+            concat!(
+                "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">",
+                "<Name>bucket</Name><Prefix>docs/</Prefix><KeyCount>1</KeyCount>",
+                "<MaxKeys>1</MaxKeys><Delimiter>/</Delimiter><IsTruncated>{}</IsTruncated>",
+                "<Contents><Key>docs/root.txt</Key><LastModified>2026-09-21T00:00:00Z</LastModified>",
+                "<ETag>&quot;etag&quot;</ETag><Size>1</Size><StorageClass>STANDARD</StorageClass></Contents>",
+                "{}</ListBucketResult>"
+            ),
+            is_truncated, token
+        );
+        list_bucket_response(&body)
+    }
+
+    #[tokio::test]
+    async fn delimiter_listing_sends_native_request_shape_on_first_and_continued_pages() {
+        let body = concat!(
+            "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">",
+            "<Name>bucket</Name><Prefix>docs/</Prefix><KeyCount>2</KeyCount>",
+            "<MaxKeys>2</MaxKeys><Delimiter>/</Delimiter><IsTruncated>false</IsTruncated>",
+            "<Contents><Key>docs/root.txt</Key><LastModified>2026-09-21T00:00:00Z</LastModified>",
+            "<ETag>&quot;etag&quot;</ETag><Size>1</Size><StorageClass>STANDARD</StorageClass></Contents>",
+            "<CommonPrefixes><Prefix>docs/sub/</Prefix></CommonPrefixes></ListBucketResult>"
+        );
+
+        for token in [None, Some("opaque+token")] {
+            let (endpoint, request_task) =
+                scripted_response_server(list_bucket_response(body)).await;
+            let provider = scripted_provider(endpoint).await;
+            let result = provider
+                .list_delimited(DelimiterListRequest {
+                    prefix: Some("docs/".to_string()),
+                    delimiter: "/".to_string(),
+                    continuation_token: token.map(ToString::to_string),
+                    max_keys: Some(2),
+                })
+                .await
+                .expect("scripted delimiter listing succeeds");
+            assert_eq!(result.objects[0].path, "docs/root.txt");
+            assert_eq!(result.common_prefixes, vec!["docs/sub/"]);
+
+            let request = String::from_utf8(request_task.await.expect("request task joins"))
+                .expect("request is UTF-8");
+            let request_line = request.lines().next().expect("request line exists");
+            assert!(request_line.contains("list-type=2"));
+            assert!(request_line.contains("delimiter=%2F"));
+            assert!(request_line.contains("prefix=docs%2F"));
+            assert!(request_line.contains("max-keys=2"));
+            assert_eq!(
+                request_line.contains("continuation-token=opaque%2Btoken"),
+                token.is_some()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn delimiter_listing_rejects_a_missing_truncation_flag() {
+        let body = concat!(
+            "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">",
+            "<Name>bucket</Name><Prefix>docs/</Prefix><KeyCount>1</KeyCount>",
+            "<MaxKeys>2</MaxKeys><Delimiter>/</Delimiter>",
+            "<Contents><Key>docs/root.txt</Key><LastModified>2026-09-21T00:00:00Z</LastModified>",
+            "<ETag>&quot;etag&quot;</ETag><Size>1</Size><StorageClass>STANDARD</StorageClass></Contents>",
+            "</ListBucketResult>"
+        );
+        let (endpoint, _request_task) = scripted_response_server(list_bucket_response(body)).await;
+        let provider = scripted_provider(endpoint).await;
+        let error = provider
+            .list_delimited(DelimiterListRequest {
+                prefix: Some("docs/".to_string()),
+                delimiter: "/".to_string(),
+                continuation_token: None,
+                max_keys: Some(2),
+            })
+            .await
+            .expect_err("missing truncation flag must fail the whole page");
+        assert!(matches!(
+            error,
+            StorageError::Other {
+                provider: Some(ProviderKind::S3),
+                operation: Some(StorageOperation::List),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn delimiter_listing_rejects_unreplayable_provider_tokens_as_other() {
+        for token in [String::new(), "t".repeat(8193)] {
+            let (endpoint, request_task) =
+                scripted_response_server(delimiter_page_response(true, Some(&token))).await;
+            let provider = scripted_provider(endpoint).await;
+            let error = provider
+                .list_delimited(DelimiterListRequest {
+                    prefix: Some("docs/".to_string()),
+                    delimiter: "/".to_string(),
+                    continuation_token: None,
+                    max_keys: Some(1),
+                })
+                .await
+                .expect_err("malformed provider token must fail the whole page");
+            assert!(matches!(error, StorageError::Other { .. }));
+            if !token.is_empty() {
+                assert!(!error.to_string().contains(&token));
+            }
+            let _single_request = request_task.await.expect("request task joins");
+        }
+    }
+
+    #[tokio::test]
+    async fn delimiter_listing_round_trips_boundary_provider_tokens_exactly() {
+        for token in ["t".to_string(), "t".repeat(8192)] {
+            let responses = vec![
+                delimiter_page_response(true, Some(&token)),
+                delimiter_page_response(false, None),
+            ];
+            let (endpoint, requests_task) = scripted_owned_responses_server(responses).await;
+            let provider = scripted_provider(endpoint).await;
+            let first = provider
+                .list_delimited(DelimiterListRequest {
+                    prefix: Some("docs/".to_string()),
+                    delimiter: "/".to_string(),
+                    continuation_token: None,
+                    max_keys: Some(1),
+                })
+                .await
+                .expect("boundary provider token is admitted");
+            assert_eq!(first.continuation_token.as_deref(), Some(token.as_str()));
+            provider
+                .list_delimited(DelimiterListRequest {
+                    prefix: Some("docs/".to_string()),
+                    delimiter: "/".to_string(),
+                    continuation_token: first.continuation_token,
+                    max_keys: Some(1),
+                })
+                .await
+                .expect("returned boundary token is replayable");
+
+            let requests = requests_task.await.expect("request task joins");
+            assert_eq!(requests.len(), 2);
+            for request in &requests {
+                let request = std::str::from_utf8(request).expect("request is UTF-8");
+                let request_line = request.lines().next().expect("request line exists");
+                assert!(request_line.contains("delimiter=%2F"));
+                assert!(request_line.contains("prefix=docs%2F"));
+                assert!(request_line.contains("max-keys=1"));
+            }
+            let continued = std::str::from_utf8(&requests[1]).expect("request is UTF-8");
+            assert!(continued
+                .lines()
+                .next()
+                .expect("request line exists")
+                .contains(&format!("continuation-token={token}")));
+        }
+    }
+
+    #[tokio::test]
+    async fn delimiter_listing_keeps_invalid_caller_tokens_as_invalid_argument() {
+        let provider = scripted_provider("http://127.0.0.1:9".to_string()).await;
+        for token in [String::new(), "t".repeat(8193)] {
+            let error = provider
+                .list_delimited(DelimiterListRequest {
+                    prefix: Some("docs/".to_string()),
+                    delimiter: "/".to_string(),
+                    continuation_token: Some(token),
+                    max_keys: Some(1),
+                })
+                .await
+                .expect_err("invalid caller token is rejected before transport");
+            assert!(matches!(
+                error,
+                StorageError::InvalidArgument { ref argument, .. }
+                    if argument == "continuation_token"
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn delimiter_listing_maps_rejected_continuation_without_disclosure() {
+        let response_body =
+            "<Error><Code>InvalidArgument</Code><Message>bad token</Message></Error>";
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\ncontent-type: application/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response_body}",
+            response_body.len()
+        );
+        let (endpoint, _request_task) = scripted_response_server(response).await;
+        let provider = scripted_provider(endpoint).await;
+        let sentinel = "opaque-token-sentinel";
+        let error = provider
+            .list_delimited(DelimiterListRequest {
+                prefix: Some("docs/".to_string()),
+                delimiter: "/".to_string(),
+                continuation_token: Some(sentinel.to_string()),
+                max_keys: Some(2),
+            })
+            .await
+            .expect_err("provider token rejection must fail");
+        assert!(matches!(
+            error,
+            StorageError::InvalidArgument { ref argument, .. }
+                if argument == "continuation_token"
+        ));
+        assert!(!error.to_string().contains(sentinel));
+        assert!(!format!("{error:?}").contains(sentinel));
     }
 
     #[test]
