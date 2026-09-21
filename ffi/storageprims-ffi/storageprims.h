@@ -265,6 +265,12 @@ StorageprimsErrorCode storageprims_get(uint64_t handle,
  * `storageprims_free_string`. The returned fd is backed by a bounded OS pipe,
  * so callers should keep draining it; otherwise the provider worker may block
  * under backpressure until the fd is drained or closed.
+ *
+ * The range uses an internal source-guarded observation and selected range
+ * request. A range proven clipped at object EOF finalizes successfully with
+ * its returned length; an ignored range, wrong window, or transport truncation
+ * remains an error. Providers that cannot enforce a guarded selection return
+ * `UnsupportedCapability` rather than exposing unvalidated current bytes.
  */
 StorageprimsErrorCode storageprims_get_range(uint64_t handle,
                                              uint64_t provider_id,

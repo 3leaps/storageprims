@@ -2020,6 +2020,7 @@ dependencies = [
  "bytes",
  "serde",
  "storageprims-core",
+ "storageprims-s3",
  "thiserror",
  "tokio",
  "tokio-stream",

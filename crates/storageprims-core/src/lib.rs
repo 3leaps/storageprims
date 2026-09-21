@@ -8,7 +8,8 @@ pub mod uri;
 
 pub use config::{sanitize_endpoint, CredentialSource, ProviderConfig, TargetConfig};
 pub use error::{
-    ConflictKind, ProviderKind, Result, StorageError, StorageErrorCode, StorageOperation,
+    ConflictKind, InspectionKind, InspectionLimitDimension, ProviderKind, Result, StorageError,
+    StorageErrorCode, StorageOperation,
 };
 pub use provider::{
     require_guarded_reads, BoxFuture, BoxedByteStream, Capability, GuardedReadProvider,
