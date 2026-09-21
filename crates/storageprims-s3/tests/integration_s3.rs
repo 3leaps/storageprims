@@ -636,7 +636,11 @@ async fn s3_provider_probe_checks_configured_bucket_against_localstack() {
     assert!(result.latency_ms < 30_000);
     assert_eq!(
         result.capabilities,
-        vec![Capability::CredentialProbe, Capability::ConditionalPut]
+        vec![
+            Capability::CredentialProbe,
+            Capability::ConditionalPut,
+            Capability::GuardedRead,
+        ]
     );
 }
 

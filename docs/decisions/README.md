@@ -13,6 +13,7 @@ storageprims.
 | ADR-0004 | Arch     | [Error Taxonomy and Cross-Provider Mapping](ADR-0004-error-taxonomy-and-cross-provider-mapping.md)                                           | Proposed            | 2026-03-16 |
 | DDR-0003 | Design   | [List Pagination Semantics and Continuation-Token Contract](DDR-0003-list-pagination-semantics-and-continuation-token-contract.md)           | Approved            | 2026-03-16 |
 | DDR-0004 | Design   | [Optional Capability Model](DDR-0004-optional-capability-model.md)                                                                           | Accepted-as-amended | 2026-03-16 |
+| DDR-0008 | Design   | [Source-Guarded Read Contract](DDR-0008-source-guarded-read-contract.md)                                                                     | Accepted            | 2026-09-21 |
 | DDR-0005 | Design   | [Copy Semantics Across Same-Provider and Cross-Provider Targets](DDR-0005-copy-semantics-across-same-provider-and-cross-provider-targets.md) | Approved            | 2026-03-16 |
 | DDR-0006 | Design   | [Provider Configuration Surface and Credential Representation](DDR-0006-provider-configuration-surface-and-credential-representation.md)     | Proposed            | 2026-03-16 |
 | DDR-0007 | Design   | [Binary-First Remote Text Inspection and Helper Boundary](DDR-0007-binary-first-remote-text-inspection-and-helper-boundary.md)               | Approved            | 2026-03-16 |

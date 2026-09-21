@@ -47,6 +47,240 @@ pub struct GetRangeRequest {
     pub length: u64,
 }
 
+/// A source selector that a provider must enforce while reading.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SourceSelector {
+    NativeVersion { token: String },
+    ValidatorMatch { token: String },
+}
+
+impl SourceSelector {
+    pub fn validate(&self) -> crate::Result<()> {
+        match self {
+            Self::NativeVersion { token } => validate_native_version(token),
+            Self::ValidatorMatch { token } => validate_strong_etag(token),
+        }
+    }
+
+    pub fn token(&self) -> &str {
+        match self {
+            Self::NativeVersion { token } | Self::ValidatorMatch { token } => token,
+        }
+    }
+
+    pub fn argument_name(&self) -> &'static str {
+        match self {
+            Self::NativeVersion { .. } => "selector.native_version",
+            Self::ValidatorMatch { .. } => "selector.validator",
+        }
+    }
+}
+
+impl std::fmt::Debug for SourceSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NativeVersion { .. } => f
+                .debug_struct("NativeVersion")
+                .field("token", &"<redacted>")
+                .finish(),
+            Self::ValidatorMatch { .. } => f
+                .debug_struct("ValidatorMatch")
+                .field("token", &"<redacted>")
+                .finish(),
+        }
+    }
+}
+
+impl std::fmt::Display for SourceSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NativeVersion { .. } => f.write_str("native_version(<redacted>)"),
+            Self::ValidatorMatch { .. } => f.write_str("validator_match(<redacted>)"),
+        }
+    }
+}
+
+/// A source selector bound by a provider to one configured target and key.
+#[derive(Clone, PartialEq, Eq)]
+pub struct GuardedReadSelection {
+    target_identity: String,
+    key: String,
+    selector: SourceSelector,
+}
+
+impl GuardedReadSelection {
+    pub(crate) fn bind(
+        target_identity: String,
+        key: impl Into<String>,
+        selector: SourceSelector,
+    ) -> crate::Result<Self> {
+        selector.validate()?;
+        let key = key.into();
+        if key.is_empty() {
+            return Err(crate::StorageError::InvalidArgument {
+                operation: None,
+                argument: "key".to_string(),
+                reason: "object key must not be empty".to_string(),
+            });
+        }
+        Ok(Self {
+            target_identity,
+            key,
+            selector,
+        })
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    pub fn selector(&self) -> &SourceSelector {
+        &self.selector
+    }
+
+    pub fn validate_for(
+        &self,
+        target_identity: &str,
+        key: &str,
+        operation: crate::StorageOperation,
+    ) -> crate::Result<()> {
+        if self.target_identity != target_identity || self.key != key {
+            return Err(crate::StorageError::InvalidArgument {
+                operation: Some(operation),
+                argument: "selection".to_string(),
+                reason: "selection is bound to a different configured target or key".to_string(),
+            });
+        }
+        self.selector.validate()
+    }
+}
+
+impl std::fmt::Debug for GuardedReadSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuardedReadSelection")
+            .field("key", &self.key)
+            .field("selector", &self.selector)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Inclusive byte window returned from a guarded range read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ByteWindow {
+    pub start: u64,
+    pub end: u64,
+}
+
+impl ByteWindow {
+    pub fn checked_len(self) -> Option<u64> {
+        self.end.checked_sub(self.start)?.checked_add(1)
+    }
+}
+
+/// Source evidence returned from the same response that supplied metadata or bytes.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceReceipt {
+    pub path: String,
+    pub native_version: Option<String>,
+    pub validator: Option<String>,
+    pub total_size: Option<u64>,
+    pub requested_window: Option<ByteWindow>,
+    pub returned_window: Option<ByteWindow>,
+}
+
+impl std::fmt::Debug for SourceReceipt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceReceipt")
+            .field("path", &self.path)
+            .field(
+                "native_version",
+                &self.native_version.as_ref().map(|_| "<redacted>"),
+            )
+            .field("validator", &self.validator.as_ref().map(|_| "<redacted>"))
+            .field("total_size", &self.total_size)
+            .field("requested_window", &self.requested_window)
+            .field("returned_window", &self.returned_window)
+            .finish()
+    }
+}
+
+/// Unconditional source observation. It never authorizes a later unguarded read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceObservation {
+    pub receipt: SourceReceipt,
+    pub content_type: Option<String>,
+    pub last_modified: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// A guarded byte response whose receipt describes the same provider response.
+pub struct GuardedReadResponse {
+    pub receipt: SourceReceipt,
+    pub reader: crate::BoxedByteStream,
+}
+
+impl std::fmt::Debug for GuardedReadResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuardedReadResponse")
+            .field("receipt", &self.receipt)
+            .field("reader", &"<owned stream>")
+            .finish()
+    }
+}
+
+/// An offset-and-length request over a previously bound selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuardedRangeRequest {
+    pub selection: GuardedReadSelection,
+    pub offset: u64,
+    pub length: u64,
+}
+
+fn invalid_selector(argument: &str, reason: &str) -> crate::StorageError {
+    crate::StorageError::InvalidArgument {
+        operation: None,
+        argument: argument.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+fn validate_native_version(token: &str) -> crate::Result<()> {
+    let bytes = token.as_bytes();
+    if !(1..=1024).contains(&bytes.len())
+        || !bytes.iter().all(|byte| (0x21..=0x7e).contains(byte))
+        || bytes
+            .iter()
+            .any(|byte| matches!(*byte, b'"' | b',' | b'\\'))
+        || token.eq_ignore_ascii_case("null")
+        || token.eq_ignore_ascii_case("\"null\"")
+    {
+        return Err(invalid_selector(
+            "selector.native_version",
+            "native version selector has an invalid format",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_strong_etag(token: &str) -> crate::Result<()> {
+    let bytes = token.as_bytes();
+    let valid = (3..=128).contains(&bytes.len())
+        && bytes.first() == Some(&b'"')
+        && bytes.last() == Some(&b'"')
+        && bytes[1..bytes.len() - 1]
+            .iter()
+            .all(|byte| *byte == 0x21 || (0x23..=0x7e).contains(byte));
+    if !valid {
+        return Err(invalid_selector(
+            "selector.validator",
+            "validator selector must be one strong quoted entity tag",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PutOptions {
     pub content_length: Option<u64>,
@@ -282,6 +516,95 @@ mod tests {
         );
 
         assert!(!rendered.contains(sentinel));
+        assert!(rendered.contains("<redacted>"));
+        assert!(!format!(
+            "{}",
+            SourceSelector::NativeVersion {
+                token: sentinel.to_string(),
+            }
+        )
+        .contains(sentinel));
+    }
+
+    #[test]
+    fn guarded_selector_validation_is_strong_and_redacted() {
+        let valid_native = SourceSelector::NativeVersion {
+            token: "version-1".to_string(),
+        };
+        valid_native.validate().expect("valid native version");
+        let valid_validator = SourceSelector::ValidatorMatch {
+            token: "\"etag-1\"".to_string(),
+        };
+        valid_validator.validate().expect("valid strong entity tag");
+
+        for selector in [
+            SourceSelector::NativeVersion {
+                token: "NULL".to_string(),
+            },
+            SourceSelector::NativeVersion {
+                token: "version,one".to_string(),
+            },
+            SourceSelector::ValidatorMatch {
+                token: "W/\"weak\"".to_string(),
+            },
+            SourceSelector::ValidatorMatch {
+                token: "*".to_string(),
+            },
+            SourceSelector::ValidatorMatch {
+                token: "unquoted".to_string(),
+            },
+        ] {
+            assert!(matches!(
+                selector.validate(),
+                Err(crate::StorageError::InvalidArgument { .. })
+            ));
+        }
+
+        let sentinel = "selector-secret-sentinel";
+        let rendered = format!(
+            "{:?}",
+            SourceSelector::NativeVersion {
+                token: sentinel.to_string(),
+            }
+        );
+        assert!(!rendered.contains(sentinel));
+        assert!(rendered.contains("<redacted>"));
+    }
+
+    #[test]
+    fn selection_rejects_cross_target_or_key_without_disclosing_token() {
+        let sentinel = "selection-secret-sentinel";
+        let selection = GuardedReadSelection::bind(
+            "target-a".to_string(),
+            "object-a",
+            SourceSelector::NativeVersion {
+                token: sentinel.to_string(),
+            },
+        )
+        .expect("selection binds");
+        let error = selection
+            .validate_for("target-b", "object-a", crate::StorageOperation::GuardedGet)
+            .expect_err("cross target must fail");
+        assert!(matches!(error, crate::StorageError::InvalidArgument { .. }));
+        assert!(!error.to_string().contains(sentinel));
+        assert!(!format!("{selection:?}").contains(sentinel));
+    }
+
+    #[test]
+    fn source_receipt_debug_redacts_observed_identity() {
+        let native = "native-version-sentinel";
+        let validator = "\"validator-sentinel\"";
+        let receipt = SourceReceipt {
+            path: "object".to_string(),
+            native_version: Some(native.to_string()),
+            validator: Some(validator.to_string()),
+            total_size: Some(1),
+            requested_window: None,
+            returned_window: None,
+        };
+        let rendered = format!("{receipt:?}");
+        assert!(!rendered.contains(native));
+        assert!(!rendered.contains(validator));
         assert!(rendered.contains("<redacted>"));
     }
 }

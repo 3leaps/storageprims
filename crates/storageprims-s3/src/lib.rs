@@ -3,23 +3,31 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
-use aws_sdk_s3::error::{DisplayErrorContext, ProvideErrorMetadata};
+use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
+use aws_smithy_runtime_api::box_error::BoxError;
+use aws_smithy_runtime_api::client::interceptors::context::BeforeDeserializationInterceptorContextRef;
+use aws_smithy_runtime_api::client::interceptors::Intercept;
+use aws_smithy_runtime_api::client::runtime_components::RuntimeComponents;
+use aws_smithy_types::config_bag::ConfigBag;
+use aws_smithy_types::retry::RetryConfig;
 use bytes::Bytes;
 use http_body::{Frame, SizeHint};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use storageprims_core::{
-    sanitize_endpoint, BoxFuture, BoxedByteStream, Capability, ConflictKind, CopyRequest,
-    CopyResult, CopyStrategy, CredentialSource, CredentialSourceKind, GetRangeRequest, ListOptions,
-    ListResult, ObjectMetadata, ObjectSummary, ProbeResult, ProbeScope, ProviderConfig,
-    ProviderKind, PutOptions, PutPrecondition, PutResult, Result, StorageError, StorageOperation,
+    sanitize_endpoint, BoxFuture, BoxedByteStream, ByteWindow, Capability, ConflictKind,
+    CopyRequest, CopyResult, CopyStrategy, CredentialSource, CredentialSourceKind, GetRangeRequest,
+    GuardedRangeRequest, GuardedReadProvider, GuardedReadResponse, GuardedReadSelection,
+    ListOptions, ListResult, ObjectMetadata, ObjectSummary, ProbeResult, ProbeScope,
+    ProviderConfig, ProviderKind, PutOptions, PutPrecondition, PutResult, Result,
+    SourceObservation, SourceReceipt, SourceSelector, StorageError, StorageOperation,
     StorageProvider, StorageUri,
 };
 use tokio::io::{AsyncRead, ReadBuf};
@@ -27,6 +35,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 #[derive(Clone)]
 pub struct S3Provider {
     client: Client,
+    guarded_config: aws_sdk_s3::Config,
     bucket: String,
     root_prefix: Option<String>,
     endpoint: Option<String>,
@@ -61,6 +70,28 @@ struct AsyncReadBody {
     reader: Mutex<BoxedByteStream>,
     finished: bool,
     remaining: u64,
+}
+
+#[derive(Debug)]
+struct ResponseStatusInterceptor {
+    status: Arc<Mutex<Option<u16>>>,
+}
+
+impl Intercept for ResponseStatusInterceptor {
+    fn name(&self) -> &'static str {
+        "storageprims_guarded_response_status"
+    }
+
+    fn read_before_deserialization(
+        &self,
+        context: &BeforeDeserializationInterceptorContextRef<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> std::result::Result<(), BoxError> {
+        *self.status.lock().expect("response status mutex poisoned") =
+            Some(context.response().status().as_u16());
+        Ok(())
+    }
 }
 
 impl S3Provider {
@@ -124,8 +155,16 @@ impl S3Provider {
         service_config.set_force_path_style(config.target.force_path_style);
         let client = Client::from_conf(service_config.build());
 
+        // Guarded reads fail closed rather than depending on SDK retry mutation
+        // semantics for VersionId, If-Match, or Range headers.
+        let mut guarded_service_config = aws_sdk_s3::config::Builder::from(&sdk_config);
+        guarded_service_config.set_force_path_style(config.target.force_path_style);
+        guarded_service_config.set_retry_config(Some(RetryConfig::standard().with_max_attempts(1)));
+        let guarded_config = guarded_service_config.build();
+
         Ok(Self {
             client,
+            guarded_config,
             bucket,
             root_prefix,
             endpoint: config.target.endpoint.clone(),
@@ -151,6 +190,29 @@ impl S3Provider {
         }
 
         Ok(join_key(self.root_prefix.as_deref(), key))
+    }
+
+    fn guarded_target_identity(&self) -> String {
+        let endpoint = self
+            .endpoint
+            .as_deref()
+            .map(sanitize_endpoint)
+            .unwrap_or_else(|| "aws".to_string());
+        format!(
+            "s3|{}|{}|{}",
+            endpoint,
+            self.bucket,
+            self.root_prefix.as_deref().unwrap_or("")
+        )
+    }
+
+    fn guarded_client(&self, status: Arc<Mutex<Option<u16>>>) -> Client {
+        Client::from_conf(
+            self.guarded_config
+                .to_builder()
+                .interceptor(ResponseStatusInterceptor { status })
+                .build(),
+        )
     }
 
     fn resolve_copy_location(&self, value: &str, field: &str) -> Result<S3Location> {
@@ -242,7 +304,15 @@ impl StorageProvider for S3Provider {
     }
 
     fn capabilities(&self) -> Vec<Capability> {
-        vec![Capability::CredentialProbe, Capability::ConditionalPut]
+        vec![
+            Capability::CredentialProbe,
+            Capability::ConditionalPut,
+            Capability::GuardedRead,
+        ]
+    }
+
+    fn guarded_reads(&self) -> Option<&dyn GuardedReadProvider> {
+        Some(self)
     }
 
     fn list(&self, options: ListOptions) -> BoxFuture<'_, ListResult> {
@@ -548,6 +618,299 @@ impl StorageProvider for S3Provider {
     }
 }
 
+impl GuardedReadProvider for S3Provider {
+    fn guarded_read_target_identity(&self) -> String {
+        self.guarded_target_identity()
+    }
+
+    fn observe_source(&self, key: &str) -> BoxFuture<'_, SourceObservation> {
+        let key = key.to_string();
+        Box::pin(async move {
+            let resolved_key = self.resolve_key(&key)?;
+            let response = self
+                .guarded_client(Arc::new(Mutex::new(None)))
+                .head_object()
+                .bucket(&self.bucket)
+                .key(&resolved_key)
+                .send()
+                .await
+                .map_err(|error| {
+                    map_sdk_error(
+                        ProviderKind::S3,
+                        StorageOperation::ObserveSource,
+                        Some(&resolved_key),
+                        Some(&self.bucket),
+                        error,
+                    )
+                })?;
+            if response.delete_marker().unwrap_or(false) {
+                return Err(selected_not_found(StorageOperation::ObserveSource, &key));
+            }
+            let native_version = observed_native_version(response.version_id());
+            let validator = response.e_tag().map(ToString::to_string);
+            let total_size = response
+                .content_length()
+                .and_then(|size| u64::try_from(size).ok());
+            Ok(SourceObservation {
+                receipt: SourceReceipt {
+                    path: key,
+                    native_version,
+                    validator,
+                    total_size,
+                    requested_window: None,
+                    returned_window: None,
+                },
+                content_type: response.content_type().map(ToString::to_string),
+                last_modified: response.last_modified().map(ToString::to_string),
+                metadata: response
+                    .metadata()
+                    .map(|values| values.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                    .unwrap_or_default(),
+            })
+        })
+    }
+
+    fn guarded_head(&self, selection: GuardedReadSelection) -> BoxFuture<'_, SourceReceipt> {
+        Box::pin(async move {
+            let key = selection.key().to_string();
+            selection.validate_for(
+                &self.guarded_target_identity(),
+                &key,
+                StorageOperation::GuardedHead,
+            )?;
+            let resolved_key = self.resolve_key(&key)?;
+            let request = self
+                .guarded_client(Arc::new(Mutex::new(None)))
+                .head_object()
+                .bucket(&self.bucket)
+                .key(&resolved_key);
+            let request = apply_head_selector(request, selection.selector());
+            let response = request.send().await.map_err(|error| {
+                map_guarded_sdk_error(
+                    StorageOperation::GuardedHead,
+                    selection.selector(),
+                    Some(&resolved_key),
+                    Some(&self.bucket),
+                    error,
+                )
+            })?;
+            if response.delete_marker().unwrap_or(false) {
+                return Err(selected_not_found(StorageOperation::GuardedHead, &key));
+            }
+            checked_receipt(
+                &key,
+                selection.selector(),
+                S3ReceiptEvidence::from_head(&response),
+                None,
+                None,
+                StorageOperation::GuardedHead,
+            )
+        })
+    }
+
+    fn guarded_get(&self, selection: GuardedReadSelection) -> BoxFuture<'_, GuardedReadResponse> {
+        Box::pin(async move {
+            let key = selection.key().to_string();
+            selection.validate_for(
+                &self.guarded_target_identity(),
+                &key,
+                StorageOperation::GuardedGet,
+            )?;
+            let resolved_key = self.resolve_key(&key)?;
+            let response_status = Arc::new(Mutex::new(None));
+            let request = self
+                .guarded_client(response_status.clone())
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&resolved_key);
+            let request = apply_get_selector(request, selection.selector());
+            let response = request.send().await.map_err(|error| {
+                map_guarded_sdk_error(
+                    StorageOperation::GuardedGet,
+                    selection.selector(),
+                    Some(&resolved_key),
+                    Some(&self.bucket),
+                    error,
+                )
+            })?;
+            if response.delete_marker().unwrap_or(false) {
+                return Err(selected_not_found(StorageOperation::GuardedGet, &key));
+            }
+            let content_length =
+                checked_content_length(response.content_length(), StorageOperation::GuardedGet)?;
+            let response_status = response_status
+                .lock()
+                .expect("response status mutex poisoned")
+                .ok_or_else(|| {
+                    invalid_response(
+                        StorageOperation::GuardedGet,
+                        "full response status was not available",
+                    )
+                })?;
+            let window = validate_full_get_response(
+                response_status,
+                response.content_range(),
+                content_length,
+            )?;
+            let receipt = checked_receipt(
+                &key,
+                selection.selector(),
+                S3ReceiptEvidence::from_get(&response),
+                None,
+                window,
+                StorageOperation::GuardedGet,
+            )?;
+            let reader: BoxedByteStream = Box::new(DeclaredLengthRead::new(
+                Box::new(response.body.into_async_read()),
+                content_length,
+            ));
+            Ok(GuardedReadResponse { receipt, reader })
+        })
+    }
+
+    fn guarded_get_range(
+        &self,
+        request: GuardedRangeRequest,
+    ) -> BoxFuture<'_, GuardedReadResponse> {
+        Box::pin(async move {
+            if request.length == 0 {
+                return Err(StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::GuardedGetRange),
+                    argument: "length".to_string(),
+                    reason: "range length must be greater than zero".to_string(),
+                });
+            }
+            let requested_end =
+                request
+                    .offset
+                    .checked_add(request.length - 1)
+                    .ok_or_else(|| StorageError::InvalidArgument {
+                        operation: Some(StorageOperation::GuardedGetRange),
+                        argument: "length".to_string(),
+                        reason: "requested range overflows u64".to_string(),
+                    })?;
+            let key = request.selection.key().to_string();
+            request.selection.validate_for(
+                &self.guarded_target_identity(),
+                &key,
+                StorageOperation::GuardedGetRange,
+            )?;
+            let resolved_key = self.resolve_key(&key)?;
+            let range = format!("bytes={}-{}", request.offset, requested_end);
+            let response_status = Arc::new(Mutex::new(None));
+            let request_builder = self
+                .guarded_client(response_status.clone())
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&resolved_key)
+                .range(range);
+            let request_builder = apply_get_selector(request_builder, request.selection.selector());
+            let response = request_builder.send().await.map_err(|error| {
+                map_guarded_sdk_error(
+                    StorageOperation::GuardedGetRange,
+                    request.selection.selector(),
+                    Some(&resolved_key),
+                    Some(&self.bucket),
+                    error,
+                )
+            })?;
+            let response_status = response_status
+                .lock()
+                .expect("response status mutex poisoned")
+                .ok_or_else(|| {
+                    invalid_response(
+                        StorageOperation::GuardedGetRange,
+                        "range response status was not available",
+                    )
+                })?;
+            if response.delete_marker().unwrap_or(false) {
+                return Err(selected_not_found(StorageOperation::GuardedGetRange, &key));
+            }
+            let returned =
+                parse_content_range(response.content_range(), StorageOperation::GuardedGetRange)?;
+            let expected_end = match returned.total_size {
+                Some(total) => {
+                    if request.offset >= total {
+                        return Err(StorageError::InvalidArgument {
+                            operation: Some(StorageOperation::GuardedGetRange),
+                            argument: "offset".to_string(),
+                            reason: "range begins at or beyond the end of the object".to_string(),
+                        });
+                    }
+                    requested_end.min(total - 1)
+                }
+                None => requested_end,
+            };
+            let requested = ByteWindow {
+                start: request.offset,
+                end: requested_end,
+            };
+            let expected = ByteWindow {
+                start: request.offset,
+                end: expected_end,
+            };
+            if returned.window != expected {
+                return Err(invalid_response(
+                    StorageOperation::GuardedGetRange,
+                    "response range does not match the requested window",
+                ));
+            }
+            let returned_length = returned.window.checked_len().ok_or_else(|| {
+                invalid_response(
+                    StorageOperation::GuardedGetRange,
+                    "range response window length overflows u64",
+                )
+            })?;
+            if response_status == 200
+                && !(returned.window.start == 0
+                    && returned.total_size == Some(returned_length)
+                    && expected == returned.window)
+            {
+                return Err(invalid_response(
+                    StorageOperation::GuardedGetRange,
+                    "full-status range response does not prove the entire requested object",
+                ));
+            }
+            if response_status != 200 && response_status != 206 {
+                return Err(invalid_response(
+                    StorageOperation::GuardedGetRange,
+                    "range response has an unexpected successful status",
+                ));
+            }
+            let content_length = checked_content_length(
+                response.content_length(),
+                StorageOperation::GuardedGetRange,
+            )?
+            .ok_or_else(|| {
+                invalid_response(
+                    StorageOperation::GuardedGetRange,
+                    "range response is missing content length",
+                )
+            })?;
+            if content_length != returned_length {
+                return Err(invalid_response(
+                    StorageOperation::GuardedGetRange,
+                    "range response content length does not match content range",
+                ));
+            }
+            let mut receipt = checked_receipt(
+                &key,
+                request.selection.selector(),
+                S3ReceiptEvidence::from_get(&response),
+                Some(requested),
+                Some(returned.window),
+                StorageOperation::GuardedGetRange,
+            )?;
+            receipt.total_size = returned.total_size;
+            let reader: BoxedByteStream = Box::new(DeclaredLengthRead::new(
+                Box::new(response.body.into_async_read()),
+                Some(content_length),
+            ));
+            Ok(GuardedReadResponse { receipt, reader })
+        })
+    }
+}
+
 impl S3Provider {
     async fn probe_head_bucket(&self, started: Instant) -> Result<ProbeResult> {
         self.client
@@ -737,6 +1100,371 @@ fn validate_match_token(token: &str) -> Result<()> {
     }
 }
 
+fn apply_head_selector(
+    request: aws_sdk_s3::operation::head_object::builders::HeadObjectFluentBuilder,
+    selector: &SourceSelector,
+) -> aws_sdk_s3::operation::head_object::builders::HeadObjectFluentBuilder {
+    match selector {
+        SourceSelector::NativeVersion { token } => request.version_id(token),
+        SourceSelector::ValidatorMatch { token } => request.if_match(token),
+    }
+}
+
+fn apply_get_selector(
+    request: aws_sdk_s3::operation::get_object::builders::GetObjectFluentBuilder,
+    selector: &SourceSelector,
+) -> aws_sdk_s3::operation::get_object::builders::GetObjectFluentBuilder {
+    match selector {
+        SourceSelector::NativeVersion { token } => request.version_id(token),
+        SourceSelector::ValidatorMatch { token } => request.if_match(token),
+    }
+}
+
+fn observed_native_version(version: Option<&str>) -> Option<String> {
+    version
+        .filter(|value| *value != "null")
+        .map(ToString::to_string)
+}
+
+fn selected_not_found(operation: StorageOperation, key: &str) -> StorageError {
+    StorageError::NotFound {
+        provider: ProviderKind::S3,
+        operation,
+        path: key.to_string(),
+    }
+}
+
+fn invalid_response(operation: StorageOperation, detail: &str) -> StorageError {
+    StorageError::Io {
+        operation: Some(operation),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, detail),
+    }
+}
+
+fn checked_content_length(value: Option<i64>, operation: StorageOperation) -> Result<Option<u64>> {
+    value
+        .map(|length| {
+            u64::try_from(length).map_err(|_| {
+                invalid_response(operation, "response contains an invalid content length")
+            })
+        })
+        .transpose()
+}
+
+struct S3ReceiptEvidence<'a> {
+    version_id: Option<&'a str>,
+    etag: Option<&'a str>,
+    content_length: Option<i64>,
+}
+
+impl<'a> S3ReceiptEvidence<'a> {
+    fn from_head(response: &'a aws_sdk_s3::operation::head_object::HeadObjectOutput) -> Self {
+        Self {
+            version_id: response.version_id(),
+            etag: response.e_tag(),
+            content_length: response.content_length(),
+        }
+    }
+
+    fn from_get(response: &'a aws_sdk_s3::operation::get_object::GetObjectOutput) -> Self {
+        Self {
+            version_id: response.version_id(),
+            etag: response.e_tag(),
+            content_length: response.content_length(),
+        }
+    }
+}
+
+fn checked_receipt(
+    path: &str,
+    selector: &SourceSelector,
+    evidence: S3ReceiptEvidence<'_>,
+    requested_window: Option<ByteWindow>,
+    returned_window: Option<ByteWindow>,
+    operation: StorageOperation,
+) -> Result<SourceReceipt> {
+    let native_version = observed_native_version(evidence.version_id);
+    let validator = evidence.etag.map(ToString::to_string);
+    match selector {
+        SourceSelector::NativeVersion { token } => {
+            if native_version.as_deref() != Some(token) {
+                return Err(invalid_response(
+                    operation,
+                    "response native version does not match the selected source",
+                ));
+            }
+        }
+        SourceSelector::ValidatorMatch { token } => {
+            let strong_response = validator.as_ref().is_some_and(|value| {
+                SourceSelector::ValidatorMatch {
+                    token: value.clone(),
+                }
+                .validate()
+                .is_ok()
+            });
+            if !strong_response || validator.as_deref() != Some(token) {
+                return Err(invalid_response(
+                    operation,
+                    "response validator does not match the selected source",
+                ));
+            }
+        }
+    }
+    Ok(SourceReceipt {
+        path: path.to_string(),
+        native_version,
+        validator,
+        total_size: checked_content_length(evidence.content_length, operation)?,
+        requested_window,
+        returned_window,
+    })
+}
+
+struct ParsedContentRange {
+    window: ByteWindow,
+    total_size: Option<u64>,
+}
+
+fn parse_content_range(
+    value: Option<&str>,
+    operation: StorageOperation,
+) -> Result<ParsedContentRange> {
+    let value = value
+        .ok_or_else(|| invalid_response(operation, "range response is missing content range"))?;
+    let fields = value
+        .strip_prefix("bytes ")
+        .and_then(|value| value.split_once('/'));
+    let Some((window, total)) = fields else {
+        return Err(invalid_response(
+            operation,
+            "range response has an invalid content range",
+        ));
+    };
+    let Some((start, end)) = window.split_once('-') else {
+        return Err(invalid_response(
+            operation,
+            "range response has an invalid content range",
+        ));
+    };
+    let start = start
+        .parse::<u64>()
+        .map_err(|_| invalid_response(operation, "range response has an invalid content range"))?;
+    let end = end
+        .parse::<u64>()
+        .map_err(|_| invalid_response(operation, "range response has an invalid content range"))?;
+    if end < start {
+        return Err(invalid_response(
+            operation,
+            "range response has an invalid content range",
+        ));
+    }
+    let total_size = if total == "*" {
+        None
+    } else {
+        let total = total.parse::<u64>().map_err(|_| {
+            invalid_response(operation, "range response has an invalid content range")
+        })?;
+        if total == 0 || end >= total {
+            return Err(invalid_response(
+                operation,
+                "range response has an invalid content range",
+            ));
+        }
+        Some(total)
+    };
+    Ok(ParsedContentRange {
+        window: ByteWindow { start, end },
+        total_size,
+    })
+}
+
+fn validate_full_get_response(
+    status: u16,
+    content_range: Option<&str>,
+    content_length: Option<u64>,
+) -> Result<Option<ByteWindow>> {
+    if status != 200 {
+        return Err(invalid_response(
+            StorageOperation::GuardedGet,
+            "full guarded read received a partial or unexpected successful status",
+        ));
+    }
+    let Some(content_range) = content_range else {
+        return Ok(content_length
+            .filter(|length| *length > 0)
+            .map(|length| ByteWindow {
+                start: 0,
+                end: length - 1,
+            }));
+    };
+    let parsed = parse_content_range(Some(content_range), StorageOperation::GuardedGet)?;
+    let returned_length = parsed.window.checked_len().ok_or_else(|| {
+        invalid_response(
+            StorageOperation::GuardedGet,
+            "full response window length overflows u64",
+        )
+    })?;
+    if parsed.window.start != 0
+        || parsed.total_size != Some(returned_length)
+        || content_length != Some(returned_length)
+    {
+        return Err(invalid_response(
+            StorageOperation::GuardedGet,
+            "full response content range does not describe the entire object",
+        ));
+    }
+    Ok(Some(parsed.window))
+}
+
+fn map_guarded_sdk_error<E>(
+    operation: StorageOperation,
+    selector: &SourceSelector,
+    target: Option<&str>,
+    container: Option<&str>,
+    error: aws_sdk_s3::error::SdkError<E>,
+) -> StorageError
+where
+    E: std::error::Error + ProvideErrorMetadata + Send + Sync + 'static,
+{
+    use aws_sdk_s3::error::SdkError;
+
+    if let SdkError::ServiceError(context) = &error {
+        let status = context.raw().status().as_u16();
+        let delete_marker = context
+            .raw()
+            .headers()
+            .get("x-amz-delete-marker")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        if status == 304 {
+            return invalid_response(
+                operation,
+                "guarded read received an unexpected not-modified response",
+            );
+        }
+        if status == 405 && delete_marker {
+            return selected_not_found(operation, target.unwrap_or_default());
+        }
+        if status == 412 && matches!(selector, SourceSelector::ValidatorMatch { .. }) {
+            return StorageError::Conflict {
+                provider: ProviderKind::S3,
+                operation,
+                target: target.map(ToString::to_string),
+                kind: ConflictKind::TokenMismatch,
+                detail: "source validator did not match".to_string(),
+            };
+        }
+        if status == 416 {
+            return StorageError::InvalidArgument {
+                operation: Some(operation),
+                argument: "offset".to_string(),
+                reason: "requested range is outside the object".to_string(),
+            };
+        }
+        if status == 403 {
+            return StorageError::AccessDenied {
+                provider: ProviderKind::S3,
+                operation,
+                target: target.map(ToString::to_string),
+                detail: "access denied".to_string(),
+            };
+        }
+        match context.err().code().unwrap_or_default() {
+            "PreconditionFailed" if matches!(selector, SourceSelector::ValidatorMatch { .. }) => {
+                return StorageError::Conflict {
+                    provider: ProviderKind::S3,
+                    operation,
+                    target: target.map(ToString::to_string),
+                    kind: ConflictKind::TokenMismatch,
+                    detail: "source validator did not match".to_string(),
+                };
+            }
+            "NoSuchVersion" => {
+                return selected_not_found(operation, target.unwrap_or_default());
+            }
+            "InvalidRange" | "RequestedRangeNotSatisfiable" => {
+                return StorageError::InvalidArgument {
+                    operation: Some(operation),
+                    argument: "offset".to_string(),
+                    reason: "requested range is outside the object".to_string(),
+                };
+            }
+            _ => {}
+        }
+    }
+    map_sdk_error(ProviderKind::S3, operation, target, container, error)
+}
+
+/// An owned reader that exposes declared-length truncation and overlong-body errors.
+struct DeclaredLengthRead {
+    reader: BoxedByteStream,
+    remaining: Option<u64>,
+    checked_end: bool,
+}
+
+impl DeclaredLengthRead {
+    fn new(reader: BoxedByteStream, remaining: Option<u64>) -> Self {
+        Self {
+            reader,
+            remaining,
+            checked_end: false,
+        }
+    }
+}
+
+impl AsyncRead for DeclaredLengthRead {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let Some(remaining) = self.remaining else {
+            return Pin::new(&mut *self.reader).poll_read(cx, buf);
+        };
+        if remaining == 0 {
+            if self.checked_end {
+                return Poll::Ready(Ok(()));
+            }
+            let mut probe = [0_u8; 1];
+            let mut probe_buf = ReadBuf::new(&mut probe);
+            return match Pin::new(&mut *self.reader).poll_read(cx, &mut probe_buf) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Ok(())) if probe_buf.filled().is_empty() => {
+                    self.checked_end = true;
+                    Poll::Ready(Ok(()))
+                }
+                Poll::Ready(Ok(())) => Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "stream exceeded declared response length",
+                ))),
+                Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            };
+        }
+
+        let capacity = buf.remaining().min(remaining as usize);
+        if capacity == 0 {
+            return Poll::Ready(Ok(()));
+        }
+        let mut temporary = vec![0_u8; capacity];
+        let mut temporary_buf = ReadBuf::new(&mut temporary);
+        match Pin::new(&mut *self.reader).poll_read(cx, &mut temporary_buf) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(())) if temporary_buf.filled().is_empty() => {
+                Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "stream ended before declared response length",
+                )))
+            }
+            Poll::Ready(Ok(())) => {
+                let read = temporary_buf.filled().len();
+                self.remaining = Some(remaining - read as u64);
+                buf.put_slice(&temporary_buf.filled()[..read]);
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+        }
+    }
+}
+
 fn map_put_error<E>(
     target: Option<&str>,
     container: Option<&str>,
@@ -907,7 +1635,7 @@ where
                 _ => StorageError::Other {
                     provider: Some(provider),
                     operation: Some(operation),
-                    detail: format!("{}", DisplayErrorContext(&err)),
+                    detail: "S3 request failed".to_string(),
                     source: None,
                 },
             }
@@ -916,52 +1644,26 @@ where
             StorageError::ProviderUnavailable {
                 provider,
                 operation,
-                detail: format!("{}", DisplayErrorContext(&error)),
+                detail: "S3 request transport failed".to_string(),
             }
         }
         SdkError::ResponseError(_) => StorageError::ProviderUnavailable {
             provider,
             operation,
-            detail: format!("{}", DisplayErrorContext(&error)),
+            detail: "S3 response transport failed".to_string(),
         },
         SdkError::ConstructionFailure(construction_error) => StorageError::InvalidArgument {
             operation: Some(operation),
             argument: target.unwrap_or_default().to_string(),
             reason: format!("{construction_error:?}"),
         },
-        other => {
-            let message = format!("{}", DisplayErrorContext(&other));
-            if message.contains("403") {
-                StorageError::AccessDenied {
-                    provider,
-                    operation,
-                    target: target.map(ToString::to_string),
-                    detail: "access denied".to_string(),
-                }
-            } else if message.contains("429") || message.contains("SlowDown") {
-                StorageError::Throttled {
-                    provider,
-                    operation,
-                    retry_after: parse_retry_after(&message),
-                }
-            } else {
-                StorageError::Other {
-                    provider: Some(provider),
-                    operation: Some(operation),
-                    detail: message,
-                    source: None,
-                }
-            }
-        }
+        _ => StorageError::Other {
+            provider: Some(provider),
+            operation: Some(operation),
+            detail: "S3 request failed".to_string(),
+            source: None,
+        },
     }
-}
-
-fn parse_retry_after(message: &str) -> Option<Duration> {
-    let marker = "retry-after:";
-    let lower = message.to_ascii_lowercase();
-    lower
-        .find(marker)
-        .and_then(|offset| parse_retry_after_value(&lower[offset + marker.len()..]))
 }
 
 fn parse_retry_after_value(value: &str) -> Option<Duration> {
@@ -1167,6 +1869,96 @@ mod tests {
 
     use aws_credential_types::provider::ProvideCredentials;
     use storageprims_core::TargetConfig;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn scripted_response_server(
+        response: &'static str,
+    ) -> (String, tokio::task::JoinHandle<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("scripted server binds");
+        let address = listener.local_addr().expect("scripted server has address");
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener
+                .accept()
+                .await
+                .expect("scripted server accepts request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 2048];
+            loop {
+                let read = socket.read(&mut buffer).await.expect("request reads");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("response writes");
+            request
+        });
+        (format!("http://{address}"), task)
+    }
+
+    async fn scripted_responses_server(
+        responses: &'static [&'static str],
+    ) -> (String, tokio::task::JoinHandle<Vec<Vec<u8>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("scripted server binds");
+        let address = listener.local_addr().expect("scripted server has address");
+        let task = tokio::spawn(async move {
+            let mut requests = Vec::with_capacity(responses.len());
+            for response in responses {
+                let (mut socket, _) = listener
+                    .accept()
+                    .await
+                    .expect("scripted server accepts request");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 2048];
+                loop {
+                    let read = socket.read(&mut buffer).await.expect("request reads");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("response writes");
+                requests.push(request);
+            }
+            requests
+        });
+        (format!("http://{address}"), task)
+    }
+
+    async fn scripted_provider(endpoint: String) -> S3Provider {
+        S3Provider::from_config(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                region: Some("us-east-1".to_string()),
+                endpoint: Some(endpoint),
+                force_path_style: Some(true),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::InlineStatic {
+                values: test_credentials(),
+            },
+        })
+        .await
+        .expect("scripted provider config is valid")
+    }
 
     #[test]
     fn join_key_respects_root_prefix() {
@@ -1191,6 +1983,11 @@ mod tests {
                     .credentials_provider(Credentials::from_keys("test", "test", None))
                     .build(),
             ),
+            guarded_config: aws_sdk_s3::config::Builder::new()
+                .behavior_version_latest()
+                .region(Region::new("us-east-1"))
+                .credentials_provider(Credentials::from_keys("test", "test", None))
+                .build(),
             bucket: "bucket-a".to_string(),
             root_prefix: Some("root".to_string()),
             endpoint: None,
@@ -1477,6 +2274,11 @@ mod tests {
                     .credentials_provider(Credentials::from_keys("test", "test", None))
                     .build(),
             ),
+            guarded_config: aws_sdk_s3::config::Builder::new()
+                .behavior_version_latest()
+                .region(Region::new("us-east-1"))
+                .credentials_provider(Credentials::from_keys("test", "test", None))
+                .build(),
             bucket: "bucket-a".to_string(),
             root_prefix: None,
             endpoint: None,
@@ -1485,8 +2287,26 @@ mod tests {
 
         assert_eq!(
             provider.capabilities(),
-            vec![Capability::CredentialProbe, Capability::ConditionalPut]
+            vec![
+                Capability::CredentialProbe,
+                Capability::ConditionalPut,
+                Capability::GuardedRead,
+            ]
         );
+        assert!(provider.guarded_reads().is_some());
+        let provider_dyn: &dyn StorageProvider = &provider;
+        let guarded =
+            storageprims_core::require_guarded_reads(provider_dyn, StorageOperation::GuardedGet)
+                .expect("S3 guarded reads are callable through a trait object");
+        let selection = guarded
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("valid selector binds to this provider");
+        assert_eq!(selection.key(), "object-a");
     }
 
     #[test]
@@ -1653,6 +2473,11 @@ mod tests {
                     .credentials_provider(Credentials::from_keys("test", "test", None))
                     .build(),
             ),
+            guarded_config: aws_sdk_s3::config::Builder::new()
+                .behavior_version_latest()
+                .region(Region::new("us-east-1"))
+                .credentials_provider(Credentials::from_keys("test", "test", None))
+                .build(),
             bucket: "bucket-a".to_string(),
             root_prefix: None,
             endpoint: Some("https://user:pass@example.com:9000".to_string()),
@@ -1700,6 +2525,785 @@ mod tests {
             .downcast_ref::<std::io::Error>()
             .expect("source should be an io error");
         assert_eq!(io_error.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn guarded_receipt_rejects_wrong_or_weak_response_identity() {
+        let native = SourceSelector::NativeVersion {
+            token: "version-a".to_string(),
+        };
+        assert!(matches!(
+            checked_receipt(
+                "item",
+                &native,
+                S3ReceiptEvidence {
+                    version_id: Some("version-b"),
+                    etag: Some("\"etag-a\""),
+                    content_length: Some(4),
+                },
+                None,
+                None,
+                StorageOperation::GuardedGet,
+            ),
+            Err(StorageError::Io { .. })
+        ));
+
+        let validator = SourceSelector::ValidatorMatch {
+            token: "\"etag-a\"".to_string(),
+        };
+        assert!(matches!(
+            checked_receipt(
+                "item",
+                &validator,
+                S3ReceiptEvidence {
+                    version_id: Some("version-a"),
+                    etag: Some("W/\"etag-a\""),
+                    content_length: Some(4),
+                },
+                None,
+                None,
+                StorageOperation::GuardedGet,
+            ),
+            Err(StorageError::Io { .. })
+        ));
+    }
+
+    #[test]
+    fn guarded_range_parser_requires_a_valid_content_range() {
+        let parsed = parse_content_range(Some("bytes 3-5/8"), StorageOperation::GuardedGetRange)
+            .expect("known total range parses");
+        assert_eq!(parsed.window, ByteWindow { start: 3, end: 5 });
+        assert_eq!(parsed.total_size, Some(8));
+
+        let unknown = parse_content_range(Some("bytes 3-5/*"), StorageOperation::GuardedGetRange)
+            .expect("unknown total range parses");
+        assert_eq!(unknown.total_size, None);
+
+        for content_range in [None, Some("bytes 5-3/8"), Some("bytes 0-3/0")] {
+            assert!(matches!(
+                parse_content_range(content_range, StorageOperation::GuardedGetRange),
+                Err(StorageError::Io { .. })
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn guarded_range_uses_one_selected_request_and_rejects_ignore_range() {
+        let (endpoint, request_task) = scripted_response_server(
+            "HTTP/1.1 206 Partial Content\r\ncontent-length: 1\r\ncontent-range: bytes 0-0/1\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nA",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        let mut response = provider
+            .guarded_get_range(GuardedRangeRequest {
+                selection,
+                offset: 0,
+                length: 1,
+            })
+            .await
+            .expect("matching selected range succeeds");
+        let mut bytes = Vec::new();
+        response
+            .reader
+            .read_to_end(&mut bytes)
+            .await
+            .expect("declared body reads");
+        assert_eq!(bytes, b"A");
+        assert_eq!(response.receipt.total_size, Some(1));
+        assert_eq!(
+            response.receipt.returned_window,
+            Some(ByteWindow { start: 0, end: 0 })
+        );
+        let request = String::from_utf8(request_task.await.expect("server task finishes"))
+            .expect("request is HTTP text")
+            .to_ascii_lowercase();
+        assert!(request.contains("range: bytes=0-0"));
+        assert!(request.contains("versionid=version-a"));
+
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 200 OK\r\ncontent-length: 1\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nA",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        let error = provider
+            .guarded_get_range(GuardedRangeRequest {
+                selection,
+                offset: 0,
+                length: 1,
+            })
+            .await
+            .expect_err("an endpoint ignoring range must fail before exposing a reader");
+        assert!(matches!(
+            error,
+            StorageError::Io {
+                source,
+                ..
+            } if source.kind() == ErrorKind::InvalidData
+        ));
+
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 200 OK\r\ncontent-length: 1\r\ncontent-range: bytes 0-0/2\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nA",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        assert!(matches!(
+            provider
+                .guarded_get_range(GuardedRangeRequest {
+                    selection,
+                    offset: 0,
+                    length: 1,
+                })
+                .await,
+            Err(StorageError::Io { .. })
+        ));
+
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 200 OK\r\ncontent-length: 1\r\ncontent-range: bytes 0-0/1\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nA",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        provider
+            .guarded_get_range(GuardedRangeRequest {
+                selection,
+                offset: 0,
+                length: 1,
+            })
+            .await
+            .expect("a whole-object 200 range exception is accepted");
+
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 206 Partial Content\r\ncontent-length: 1\r\ncontent-range: bytes 0-18446744073709551615/*\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nA",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        assert!(matches!(
+            provider
+                .guarded_get_range(GuardedRangeRequest {
+                    selection,
+                    offset: 0,
+                    length: 1,
+                })
+                .await,
+            Err(StorageError::Io {
+                source,
+                ..
+            }) if source.kind() == ErrorKind::InvalidData
+        ));
+    }
+
+    #[tokio::test]
+    async fn guarded_full_get_refuses_partial_responses_and_receipts_are_truthful() {
+        for response in [
+            "HTTP/1.1 206 Partial Content\r\ncontent-length: 1\r\ncontent-range: bytes 1-1/2\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nB",
+            "HTTP/1.1 200 OK\r\ncontent-length: 1\r\ncontent-range: bytes 1-1/2\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nB",
+        ] {
+            let (endpoint, _request_task) = scripted_response_server(response).await;
+            let provider = scripted_provider(endpoint).await;
+            let selection = provider
+                .bind_guarded_read(
+                    "object-a",
+                    SourceSelector::NativeVersion {
+                        token: "version-a".to_string(),
+                    },
+                )
+                .expect("selection binds");
+            assert!(matches!(
+                provider.guarded_get(selection).await,
+                Err(StorageError::Io {
+                    source,
+                    ..
+                }) if source.kind() == ErrorKind::InvalidData
+            ));
+        }
+
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 200 OK\r\ncontent-length: 2\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nAB",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        let mut response = provider
+            .guarded_get(selection)
+            .await
+            .expect("a full response succeeds");
+        let mut body = Vec::new();
+        response
+            .reader
+            .read_to_end(&mut body)
+            .await
+            .expect("complete body reads");
+        assert_eq!(body, b"AB");
+        assert_eq!(response.receipt.total_size, Some(2));
+        assert_eq!(
+            response.receipt.returned_window,
+            Some(ByteWindow { start: 0, end: 1 })
+        );
+
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 200 OK\r\ncontent-length: 0\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\n",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        let mut response = provider
+            .guarded_get(selection)
+            .await
+            .expect("a selected empty object succeeds");
+        let mut body = Vec::new();
+        response
+            .reader
+            .read_to_end(&mut body)
+            .await
+            .expect("empty body completes");
+        assert!(body.is_empty());
+        assert_eq!(response.receipt.total_size, Some(0));
+        assert_eq!(response.receipt.returned_window, None);
+    }
+
+    #[tokio::test]
+    async fn guarded_range_receipt_distinguishes_requested_and_returned_windows() {
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 206 Partial Content\r\ncontent-length: 1\r\ncontent-range: bytes 1-1/2\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nB",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        let mut response = provider
+            .guarded_get_range(GuardedRangeRequest {
+                selection,
+                offset: 1,
+                length: 10,
+            })
+            .await
+            .expect("EOF clip succeeds");
+        let mut body = Vec::new();
+        response
+            .reader
+            .read_to_end(&mut body)
+            .await
+            .expect("clipped body completes");
+        assert_eq!(body, b"B");
+        assert_eq!(
+            response.receipt.requested_window,
+            Some(ByteWindow { start: 1, end: 10 })
+        );
+        assert_eq!(
+            response.receipt.returned_window,
+            Some(ByteWindow { start: 1, end: 1 })
+        );
+        assert_eq!(response.receipt.total_size, Some(2));
+
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 206 Partial Content\r\ncontent-length: 2\r\ncontent-range: bytes 1-2/3\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nBC",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        let response = provider
+            .guarded_get_range(GuardedRangeRequest {
+                selection,
+                offset: 1,
+                length: 2,
+            })
+            .await
+            .expect("unclipped range succeeds");
+        assert_eq!(
+            response.receipt.requested_window,
+            Some(ByteWindow { start: 1, end: 2 })
+        );
+        assert_eq!(
+            response.receipt.returned_window,
+            response.receipt.requested_window
+        );
+
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 206 Partial Content\r\ncontent-length: 2\r\ncontent-range: bytes 1-2/*\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nBC",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        let response = provider
+            .guarded_get_range(GuardedRangeRequest {
+                selection,
+                offset: 1,
+                length: 2,
+            })
+            .await
+            .expect("unknown-total range succeeds without clipping");
+        assert_eq!(
+            response.receipt.requested_window,
+            Some(ByteWindow { start: 1, end: 2 })
+        );
+        assert_eq!(
+            response.receipt.returned_window,
+            response.receipt.requested_window
+        );
+        assert_eq!(response.receipt.total_size, None);
+
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 206 Partial Content\r\ncontent-length: 1\r\ncontent-range: bytes 1-1/3\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\nB",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::NativeVersion {
+                    token: "version-a".to_string(),
+                },
+            )
+            .expect("selection binds");
+        assert!(matches!(
+            provider
+                .guarded_get_range(GuardedRangeRequest {
+                    selection,
+                    offset: 1,
+                    length: 2,
+                })
+                .await,
+            Err(StorageError::Io {
+                source,
+                ..
+            }) if source.kind() == ErrorKind::InvalidData
+        ));
+    }
+
+    #[tokio::test]
+    async fn guarded_validator_read_refuses_a_replaced_source_without_exposing_bytes() {
+        let (endpoint, request_task) = scripted_response_server(
+            "HTTP/1.1 412 Precondition Failed\r\ncontent-type: application/xml\r\ncontent-length: 72\r\nconnection: close\r\n\r\n<Error><Code>PreconditionFailed</Code><Message>changed</Message></Error>",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::ValidatorMatch {
+                    token: "\"etag-a\"".to_string(),
+                },
+            )
+            .expect("selection binds");
+        let error = provider
+            .guarded_get(selection)
+            .await
+            .expect_err("a replacement that fails If-Match must expose no bytes");
+        assert!(matches!(
+            error,
+            StorageError::Conflict {
+                kind: ConflictKind::TokenMismatch,
+                ..
+            }
+        ));
+        let request = String::from_utf8(request_task.await.expect("server task finishes"))
+            .expect("request is HTTP text")
+            .to_ascii_lowercase();
+        assert!(request.contains("if-match: \"etag-a\""));
+    }
+
+    #[tokio::test]
+    async fn observed_validator_refuses_a_replacement_without_exposing_bytes() {
+        let (endpoint, requests_task) = scripted_responses_server(&[
+            "HTTP/1.1 200 OK\r\ncontent-length: 1\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\n",
+            "HTTP/1.1 412 Precondition Failed\r\ncontent-type: application/xml\r\ncontent-length: 72\r\nconnection: close\r\n\r\n<Error><Code>PreconditionFailed</Code><Message>changed</Message></Error>",
+        ])
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let observation = provider
+            .observe_source("object-a")
+            .await
+            .expect("the initial source observation succeeds");
+        let validator = observation
+            .receipt
+            .validator
+            .expect("the observation returns its strong validator");
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::ValidatorMatch { token: validator },
+            )
+            .expect("the observed validator binds to the same target and key");
+        let error = provider
+            .guarded_get(selection)
+            .await
+            .expect_err("a replacement after observation must not expose bytes");
+        assert!(
+            matches!(
+                error,
+                StorageError::Conflict {
+                    kind: ConflictKind::TokenMismatch,
+                    ..
+                }
+            ),
+            "unexpected guarded replacement error: {error:?}"
+        );
+
+        let requests = requests_task.await.expect("server task finishes");
+        assert_eq!(requests.len(), 2);
+        let observe_request = String::from_utf8(requests[0].clone())
+            .expect("observation request is HTTP text")
+            .to_ascii_lowercase();
+        let guarded_request = String::from_utf8(requests[1].clone())
+            .expect("guarded request is HTTP text")
+            .to_ascii_lowercase();
+        assert!(observe_request.starts_with("head "));
+        assert!(guarded_request.starts_with("get "));
+        assert!(guarded_request.contains("if-match: \"etag-a\""));
+    }
+
+    #[tokio::test]
+    async fn source_observation_preserves_an_unknown_total_size() {
+        let (endpoint, _request_task) = scripted_response_server(
+            "HTTP/1.1 200 OK\r\netag: \"etag-a\"\r\nx-amz-version-id: version-a\r\nconnection: close\r\n\r\n",
+        )
+        .await;
+        let provider = scripted_provider(endpoint).await;
+        let observation = provider
+            .observe_source("object-a")
+            .await
+            .expect("observation succeeds without a declared length");
+        assert_eq!(observation.receipt.total_size, None);
+        assert_eq!(
+            observation.receipt.native_version.as_deref(),
+            Some("version-a")
+        );
+    }
+
+    #[tokio::test]
+    async fn guarded_http_errors_preserve_range_and_access_classes() {
+        for (response, expected_range_error) in [
+            (
+                "HTTP/1.1 416 Range Not Satisfiable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                true,
+            ),
+            (
+                "HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                false,
+            ),
+        ] {
+            let (endpoint, _request_task) = scripted_response_server(response).await;
+            let provider = scripted_provider(endpoint).await;
+            let selection = provider
+                .bind_guarded_read(
+                    "object-a",
+                    SourceSelector::NativeVersion {
+                        token: "version-a".to_string(),
+                    },
+                )
+                .expect("selection binds");
+            let error = provider
+                .guarded_get_range(GuardedRangeRequest {
+                    selection,
+                    offset: 0,
+                    length: 1,
+                })
+                .await
+                .expect_err("scripted error must not expose a reader");
+            if expected_range_error {
+                assert!(matches!(error, StorageError::InvalidArgument { .. }));
+            } else {
+                assert!(matches!(error, StorageError::AccessDenied { .. }));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn guarded_bodyless_412_and_403_responses_keep_canonical_classes() {
+        const PRECONDITION_FAILED: &str =
+            "HTTP/1.1 412 Precondition Failed\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        const ACCESS_DENIED: &str =
+            "HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+
+        let (endpoint, _request_task) = scripted_response_server(PRECONDITION_FAILED).await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::ValidatorMatch {
+                    token: "\"etag-a\"".to_string(),
+                },
+            )
+            .expect("selection binds");
+        assert!(matches!(
+            provider.guarded_head(selection).await,
+            Err(StorageError::Conflict {
+                kind: ConflictKind::TokenMismatch,
+                ..
+            })
+        ));
+
+        let (endpoint, _request_task) = scripted_response_server(PRECONDITION_FAILED).await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::ValidatorMatch {
+                    token: "\"etag-a\"".to_string(),
+                },
+            )
+            .expect("selection binds");
+        assert!(matches!(
+            provider.guarded_get(selection).await,
+            Err(StorageError::Conflict {
+                kind: ConflictKind::TokenMismatch,
+                ..
+            })
+        ));
+
+        let (endpoint, _request_task) = scripted_response_server(PRECONDITION_FAILED).await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::ValidatorMatch {
+                    token: "\"etag-a\"".to_string(),
+                },
+            )
+            .expect("selection binds");
+        assert!(matches!(
+            provider
+                .guarded_get_range(GuardedRangeRequest {
+                    selection,
+                    offset: 0,
+                    length: 1,
+                })
+                .await,
+            Err(StorageError::Conflict {
+                kind: ConflictKind::TokenMismatch,
+                ..
+            })
+        ));
+
+        let (endpoint, _request_task) = scripted_response_server(ACCESS_DENIED).await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::ValidatorMatch {
+                    token: "\"etag-a\"".to_string(),
+                },
+            )
+            .expect("selection binds");
+        assert!(matches!(
+            provider.guarded_head(selection).await,
+            Err(StorageError::AccessDenied { .. })
+        ));
+
+        let (endpoint, _request_task) = scripted_response_server(ACCESS_DENIED).await;
+        let provider = scripted_provider(endpoint).await;
+        let selection = provider
+            .bind_guarded_read(
+                "object-a",
+                SourceSelector::ValidatorMatch {
+                    token: "\"etag-a\"".to_string(),
+                },
+            )
+            .expect("selection binds");
+        assert!(matches!(
+            provider.guarded_get(selection).await,
+            Err(StorageError::AccessDenied { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn declared_length_reader_exposes_truncation_and_overlong_body() {
+        use tokio::io::AsyncReadExt;
+
+        let mut short = DeclaredLengthRead::new(Box::new(Cursor::new(b"abc".to_vec())), Some(5));
+        let mut data = Vec::new();
+        let error = short
+            .read_to_end(&mut data)
+            .await
+            .expect_err("truncated body must remain observable");
+        assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
+
+        let mut long = DeclaredLengthRead::new(Box::new(Cursor::new(b"abc".to_vec())), Some(2));
+        let mut data = Vec::new();
+        let error = long
+            .read_to_end(&mut data)
+            .await
+            .expect_err("overlong body must remain observable");
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn guarded_error_mapping_distinguishes_precondition_and_missing_version() {
+        let mismatch = map_guarded_sdk_error(
+            StorageOperation::GuardedGet,
+            &SourceSelector::ValidatorMatch {
+                token: "\"etag-a\"".to_string(),
+            },
+            Some("item"),
+            Some("bucket"),
+            aws_sdk_s3::error::SdkError::service_error(
+                GetObjectError::generic(
+                    ErrorMetadata::builder().code("PreconditionFailed").build(),
+                ),
+                Response::new(
+                    StatusCode::try_from(412).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+        assert!(matches!(
+            mismatch,
+            StorageError::Conflict {
+                kind: ConflictKind::TokenMismatch,
+                ..
+            }
+        ));
+
+        let missing = map_guarded_sdk_error(
+            StorageOperation::GuardedGet,
+            &SourceSelector::NativeVersion {
+                token: "version-a".to_string(),
+            },
+            Some("item"),
+            Some("bucket"),
+            aws_sdk_s3::error::SdkError::service_error(
+                GetObjectError::generic(ErrorMetadata::builder().code("NoSuchVersion").build()),
+                Response::new(
+                    StatusCode::try_from(404).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+        assert!(matches!(missing, StorageError::NotFound { .. }));
+    }
+
+    #[test]
+    fn guarded_error_mapping_handles_only_evidenced_delete_markers_and_304() {
+        let selector = SourceSelector::NativeVersion {
+            token: "version-a".to_string(),
+        };
+        let mut delete_marker_response = Response::new(
+            StatusCode::try_from(405).expect("valid status"),
+            SdkBody::empty(),
+        );
+        delete_marker_response
+            .headers_mut()
+            .insert("x-amz-delete-marker", "true");
+        let marker = map_guarded_sdk_error(
+            StorageOperation::GuardedGet,
+            &selector,
+            Some("item"),
+            Some("bucket"),
+            aws_sdk_s3::error::SdkError::service_error(
+                GetObjectError::generic(ErrorMetadata::builder().code("MethodNotAllowed").build()),
+                delete_marker_response,
+            ),
+        );
+        assert!(matches!(marker, StorageError::NotFound { .. }));
+
+        let ordinary_405 = map_guarded_sdk_error(
+            StorageOperation::GuardedGet,
+            &selector,
+            Some("item"),
+            Some("bucket"),
+            aws_sdk_s3::error::SdkError::service_error(
+                GetObjectError::generic(ErrorMetadata::builder().code("MethodNotAllowed").build()),
+                Response::new(
+                    StatusCode::try_from(405).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+        assert!(!matches!(ordinary_405, StorageError::NotFound { .. }));
+
+        let not_modified = map_guarded_sdk_error(
+            StorageOperation::GuardedGet,
+            &selector,
+            Some("item"),
+            Some("bucket"),
+            aws_sdk_s3::error::SdkError::service_error(
+                GetObjectError::generic(ErrorMetadata::builder().code("NotModified").build()),
+                Response::new(
+                    StatusCode::try_from(304).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+        assert!(matches!(
+            not_modified,
+            StorageError::Io {
+                source,
+                ..
+            } if source.kind() == ErrorKind::InvalidData
+        ));
     }
 
     #[test]
