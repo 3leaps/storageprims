@@ -12,13 +12,14 @@ pub use error::{
     StorageErrorCode, StorageOperation,
 };
 pub use provider::{
-    require_guarded_reads, BoxFuture, BoxedByteStream, Capability, GuardedReadProvider,
-    StorageProvider,
+    require_delimiter_listing, require_guarded_reads, BoxFuture, BoxedByteStream, Capability,
+    DelimiterListingProvider, GuardedReadProvider, StorageProvider,
 };
 pub use types::{
-    ByteWindow, CopyRequest, CopyResult, CopyStrategy, CredentialSourceKind, GetRangeRequest,
-    GuardedRangeRequest, GuardedReadResponse, GuardedReadSelection, ListOptions, ListResult,
-    ObjectMetadata, ObjectSummary, ProbeResult, ProbeScope, PutOptions, PutPrecondition, PutResult,
-    SourceObservation, SourceReceipt, SourceSelector,
+    ByteWindow, CopyRequest, CopyResult, CopyStrategy, CredentialSourceKind, DelimiterListRequest,
+    DelimiterListResult, GetRangeRequest, GuardedRangeRequest, GuardedReadResponse,
+    GuardedReadSelection, ListOptions, ListResult, ObjectMetadata, ObjectSummary, ProbeResult,
+    ProbeScope, PutOptions, PutPrecondition, PutResult, SourceObservation, SourceReceipt,
+    SourceSelector,
 };
 pub use uri::StorageUri;

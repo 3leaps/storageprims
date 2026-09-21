@@ -7,9 +7,9 @@ use tokio::io::AsyncRead;
 
 use crate::error::{ProviderKind, Result};
 use crate::types::{
-    CopyRequest, CopyResult, GetRangeRequest, GuardedRangeRequest, GuardedReadResponse,
-    GuardedReadSelection, ListOptions, ListResult, ObjectMetadata, ProbeResult, PutOptions,
-    PutResult, SourceObservation,
+    CopyRequest, CopyResult, DelimiterListRequest, DelimiterListResult, GetRangeRequest,
+    GuardedRangeRequest, GuardedReadResponse, GuardedReadSelection, ListOptions, ListResult,
+    ObjectMetadata, ProbeResult, PutOptions, PutResult, SourceObservation,
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -26,6 +26,24 @@ pub enum Capability {
     ConditionalPut,
     /// Source-enforced reads with same-response source receipts.
     GuardedRead,
+}
+
+/// Optional native delimiter/common-prefix listing operation.
+pub trait DelimiterListingProvider: Send + Sync {
+    fn list_delimited(&self, request: DelimiterListRequest) -> BoxFuture<'_, DelimiterListResult>;
+}
+
+/// Return native delimiter listing or the canonical refusal.
+pub fn require_delimiter_listing(
+    provider: &dyn StorageProvider,
+) -> Result<&dyn DelimiterListingProvider> {
+    provider
+        .delimiter_lists()
+        .ok_or(crate::error::StorageError::UnsupportedCapability {
+            provider: provider.provider_kind(),
+            operation: crate::error::StorageOperation::List,
+            capability: Capability::DelimiterListing,
+        })
 }
 
 /// Optional source-enforced read operations.
@@ -81,6 +99,11 @@ pub trait StorageProvider: Send + Sync {
 
     /// Return source-enforced reads when callable from this Rust surface.
     fn guarded_reads(&self) -> Option<&dyn GuardedReadProvider> {
+        None
+    }
+
+    /// Return native delimiter listing when callable from this Rust surface.
+    fn delimiter_lists(&self) -> Option<&dyn DelimiterListingProvider> {
         None
     }
 
@@ -279,6 +302,24 @@ mod tests {
                 provider: ProviderKind::Local,
                 operation: crate::error::StorageOperation::Put,
                 capability: Capability::ConditionalPut,
+            }
+        ));
+    }
+
+    #[test]
+    fn external_style_provider_keeps_default_delimiter_listing_refusal() {
+        let provider: Box<dyn StorageProvider> = Box::new(DummyProvider);
+        assert!(provider.delimiter_lists().is_none());
+        let error = match require_delimiter_listing(provider.as_ref()) {
+            Ok(_) => panic!("default hook must refuse the optional extension"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            crate::StorageError::UnsupportedCapability {
+                capability: Capability::DelimiterListing,
+                operation: crate::StorageOperation::List,
+                ..
             }
         ));
     }

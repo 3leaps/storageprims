@@ -172,7 +172,8 @@ capability discovery for bindings and multi-provider consumers.
 
 - Capability identifiers may exist before their extension traits, but providers MUST NOT advertise
   those identifiers until callers can invoke the corresponding behavior.
-- Delimiter/common-prefix listing and multipart upload extension traits remain future work.
+- Multipart upload extension traits remain future work. Delimiter listing is
+  implemented by the additive Rust extension described in DDR-0010.
 - Conditional put is the first advertised optional data-plane capability.
 - The capability identifier names used in JSON/FFI should be stable and intentionally small.
 
@@ -208,6 +209,19 @@ logical key, selector kind, and opaque token. Credentials are not target
 identity. Receipts report source evidence from the same response as the
 metadata or body and distinguish total object size from requested and returned
 byte windows.
+
+### Delimiter-listing surface amendment
+
+`DelimiterListing` is callable through an object-safe Rust extension and a
+default `StorageProvider::delimiter_lists()` discovery hook. Existing provider
+implementations remain source-compatible. The S3 provider advertises the
+capability on its Rust surface and performs one native delimiter-list request;
+it does not emulate grouping, refill a page, or descend into common prefixes.
+
+The Unix FFI capability query and probe projection omit `delimiter_listing`
+until an explicit FFI operation exists. The universal `ListOptions` and
+`ListResult` contracts remain unchanged. See DDR-0010 for admission, page
+integrity, projection, and continuation semantics.
 
 ## References
 

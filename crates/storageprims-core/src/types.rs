@@ -29,6 +29,55 @@ pub struct ListResult {
     pub is_truncated: bool,
 }
 
+/// One native delimiter-listing page request.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelimiterListRequest {
+    pub prefix: Option<String>,
+    pub delimiter: String,
+    pub continuation_token: Option<String>,
+    pub max_keys: Option<u32>,
+}
+
+impl std::fmt::Debug for DelimiterListRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DelimiterListRequest")
+            .field("prefix", &self.prefix)
+            .field("delimiter", &self.delimiter)
+            .field(
+                "continuation_token",
+                &self.continuation_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("max_keys", &self.max_keys)
+            .finish()
+    }
+}
+
+impl std::fmt::Display for DelimiterListRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "delimiter list(prefix={:?}, delimiter={:?}, continuation_token={}, max_keys={:?})",
+            self.prefix,
+            self.delimiter,
+            if self.continuation_token.is_some() {
+                "<redacted>"
+            } else {
+                "none"
+            },
+            self.max_keys
+        )
+    }
+}
+
+/// One native delimiter-listing page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelimiterListResult {
+    pub objects: Vec<ObjectSummary>,
+    pub common_prefixes: Vec<String>,
+    pub continuation_token: Option<String>,
+    pub is_truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectMetadata {
     pub path: String,
@@ -606,5 +655,21 @@ mod tests {
         assert!(!rendered.contains(native));
         assert!(!rendered.contains(validator));
         assert!(rendered.contains("<redacted>"));
+    }
+
+    #[test]
+    fn delimiter_request_debug_and_display_redact_continuation_token() {
+        let sentinel = "opaque-continuation-sentinel";
+        let request = DelimiterListRequest {
+            prefix: Some("docs/".to_string()),
+            delimiter: "/".to_string(),
+            continuation_token: Some(sentinel.to_string()),
+            max_keys: Some(10),
+        };
+
+        for rendered in [format!("{request:?}"), request.to_string()] {
+            assert!(!rendered.contains(sentinel));
+            assert!(rendered.contains("<redacted>"));
+        }
     }
 }
