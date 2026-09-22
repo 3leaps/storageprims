@@ -40,7 +40,8 @@ Part of the **3leaps prims family**:
 | Windows C ABI                                               | Planned                       |
 | Go and TypeScript bindings                                  | Planned                       |
 | GCS, Azure Blob, local filesystem, and CLI crates           | Planned                       |
-| Multipart upload and delimiter/common-prefix listing        | Planned                       |
+| Multipart upload                                             | Planned                       |
+| Rust delimiter/common-prefix listing                         | Implemented (Rust only)      |
 
 ## Quick Start (Rust)
 
