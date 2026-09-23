@@ -12,6 +12,9 @@ documentation = "https://docs.rs/storageprims-ops"
 readme = "README.md"
 publish = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 storageprims-core.workspace = true
 serde.workspace = true

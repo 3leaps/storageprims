@@ -7,7 +7,9 @@ fixture="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-github-state.XXXXXX")"
 fake_bin="$fixture/bin"
 trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/scripts" "$fake_bin"
+mkdir -p "$fixture/config/release"
 cp "$SCRIPT_DIR/release-common.sh" "$fixture/scripts/"
+cp "$SCRIPT_DIR/../config/release/ffi-platforms.txt" "$fixture/config/release/"
 printf '0.1.0\n' >"$fixture/VERSION"
 git init -q -b main "$fixture"
 git -C "$fixture" config user.name "release state test"
@@ -56,10 +58,10 @@ printf '{"tagName":"v0.1.0","targetCommitish":"%s","isDraft":%s,"assets":[' \
 printf '%s' \
   '{"name":"LICENSE-APACHE"},' \
   '{"name":"LICENSE-MIT"},' \
-  '{"name":"sbom-0.1.0.cdx.json"},' \
-  '{"name":"storageprims-ffi-0.1.0-darwin-arm64.tar.gz"},' \
-  '{"name":"storageprims-ffi-0.1.0-linux-amd64.tar.gz"},' \
-  '{"name":"storageprims-ffi-0.1.0-linux-arm64.tar.gz"}'
+  '{"name":"sbom-0.1.0.cdx.json"}'
+while read -r platform shared static; do
+  printf ',{"name":"storageprims-ffi-0.1.0-%s.tar.gz"}' "$platform"
+done <"$FAKE_PLATFORM_FILE"
 printf '%s]}\n' "$extra"
 EOF
 chmod +x "$fake_bin/gh"
@@ -79,6 +81,7 @@ run_check() {
 		export STORAGEPRIMS_RELEASE_TAG=v0.1.0
 		export FAKE_COMMIT="$fixture_commit"
 		export FAKE_RELEASE_STATE="$state"
+		export FAKE_PLATFORM_FILE="$fixture/config/release/ffi-platforms.txt"
 		unset GH_REPO
 		# shellcheck source=/dev/null
 		source scripts/release-common.sh
@@ -96,6 +99,7 @@ expect_fail env GH_REPO=other/repository \
 	STORAGEPRIMS_RELEASE_TAG=v0.1.0 \
 	FAKE_COMMIT="$fixture_commit" \
 	FAKE_RELEASE_STATE=valid \
+	FAKE_PLATFORM_FILE="$fixture/config/release/ffi-platforms.txt" \
 	bash -c "cd '$fixture'; source scripts/release-common.sh; assert_github_release_state release_base_assets"
 
 echo "[ok] GitHub repository, target, draft, and inventory controls passed"

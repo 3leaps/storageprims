@@ -7,6 +7,7 @@ storageprims.
 
 | ID       | Type     | Title                                                                                                                                        | Status              | Date       |
 | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ---------- |
+| PDR-0001 | Process  | [Publish Library Crates After the Release Tag](PDR-0001-crates-io-after-tag.md)                                                              | Accepted            | 2026-09-23 |
 | ADR-0001 | Arch     | [Canonical Core Contract and Provider-Neutral Surface](ADR-0001-canonical-core-contract-and-provider-neutral-surface.md)                     | Approved            | 2026-03-16 |
 | ADR-0002 | Arch     | [Crate Structure and Library-First Adapter Boundaries](ADR-0002-crate-structure-and-library-first-adapter-boundaries.md)                     | Approved            | 2026-03-16 |
 | ADR-0003 | Arch     | [FFI Design for Metadata and Streaming Data Plane](ADR-0003-ffi-design-for-metadata-and-streaming-data-plane.md)                             | Approved            | 2026-03-16 |

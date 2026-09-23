@@ -22,6 +22,7 @@
 .PHONY: release-clean release-download release-notes release-checksums release-sign
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
+.PHONY: release-crates-list release-crates-dry-run release-crates-verify
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -536,7 +537,18 @@ release-check: version-check ## Version consistency + package check (does not pu
 	@./scripts/check-packages.sh
 	@echo "[ok] Package check passed; cargo publish was not run"
 
+release-crates-list: ## Print the validated registry publication order
+	@./scripts/release-crates.py list
+
+release-crates-dry-run: ## Dry-run crates.io publishing from the guarded tag
+	@./scripts/release-crates-dry-run.sh
+
+release-crates-verify: ## Wait for the final registry version and verify each published crate
+	@CRATE="$(CRATE)" ./scripts/release-crates-verify.sh
+
 release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
+	@./scripts/release-crates.test.sh
+	@./scripts/release-crates-verify.test.sh
 	@./scripts/release-guard-tag-version.test.sh
 	@./scripts/release-assets.test.sh
 	@./scripts/release-github-state.test.sh

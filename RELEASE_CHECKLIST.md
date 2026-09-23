@@ -60,8 +60,8 @@ git push origin "$STORAGEPRIMS_RELEASE_TAG"
 
 - [ ] Confirm the tag workflow is green
 - [ ] Confirm the GitHub release is still a draft
-- [ ] Confirm it contains exactly the three Unix FFI archives, CycloneDX SBOM,
-      and both licenses
+- [ ] Confirm it contains the FFI archives from
+      `config/release/ffi-platforms.txt`, CycloneDX SBOM, and both licenses
 - [ ] Do not sign until the draft inventory is complete
 
 ## 3. Maintainer MFA sign and upload
@@ -100,9 +100,52 @@ make release
 - [ ] Review the final release notes and asset list
 - [ ] Publish the GitHub release only as a separate, explicit maintainer action
 
-## crates.io
+## crates.io (manual maintainer action after the tag)
 
-crates.io publication is not part of this release. There is no registry token
-in CI and no release target invokes `cargo publish`. A later, separately cued
-release task may publish `storageprims-core`, then `storageprims-ops`, then
-`storageprims-s3`; the FFI crate remains unpublished.
+The first registry version is the current tagged cut; do not backfill older
+tags. Later cuts publish only their new versions. A registry version cannot
+be overwritten: a correction takes a new patch version or a separately cued
+yank. CI has no registry token and never uploads crates.
+
+The sole ordered list is `config/release/publishable-crates.txt`; print and
+validate it with `make release-crates-list`. The FFI crate and any future CLI
+are unpublished (`publish = false`). The list orders dependencies, including
+dev dependencies.
+
+After the tag exists on origin, use a clean detached checkout of the exact
+tag and recheck `STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version`.
+Run `make release-crates-dry-run` for all publishable crates. This uses local
+path patches only for earlier workspace crates that have not yet reached the
+registry; it does not upload them. Optionally confirm that
+`cargo publish --dry-run -p storageprims-ffi` fails as unpublished (and do
+the same for a future `storageprims-cli`).
+
+Dave uses a crates.io token scoped to the publishable names and kept in an
+external secret store, never the repository or CI. For first uploads it needs
+`publish-new` and `publish-update`; subsequent updates need only
+`publish-update`. Use an expiry of 30–90 days; do not grant `yank` without a
+separate decision. Confirm any new name is unclaimed immediately before its
+first upload using `cargo info --registry crates-io <crate>`.
+Load the token only into the environment for the specific publish command;
+do not use `cargo login` (which persists plaintext in Cargo credentials).
+
+Only after an explicit publish cue, Dave runs the following **one crate at a
+time** in the order printed by `make release-crates-list`, setting `crate`
+to the next list entry before each pass:
+
+```bash
+make release-crates-list
+cargo publish --locked -p "${crate:?set the next ordered crate}"
+make release-crates-verify CRATE="$crate"
+# Repeat the previous two commands for each remaining entry; after the last:
+make release-crates-verify
+```
+
+Immediately before **each** upload, reconfirm the cue; any intervening hold
+stops the sequence. Each verification waits for `cargo info --registry crates-io
+<crate>@<version>` (including after the last crate), and checks the exact
+version on the crates.io API. The final command rechecks the entire list. Never use bare
+`cargo info` as proof: it may resolve a local workspace crate. Review the
+registry pages and docs.rs builds after the final check. If the tag Release
+workflow's package check failed while registry dependencies were unavailable,
+rerun it after the index exposes this version, before signing the draft.

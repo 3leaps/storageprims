@@ -43,7 +43,7 @@ jobs:
           printf 'commit=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
           printf 'version=%s\n' "$(cat VERSION)" >>"$GITHUB_OUTPUT"
       - name: Verify package archives without publishing
-        run: ./scripts/check-packages.sh
+        run: make release-check
   build-ffi:
     name: FFI (${{ matrix.platform }})
     needs: validate
@@ -56,14 +56,17 @@ jobs:
             target: x86_64-unknown-linux-gnu
             platform: linux-amd64
             shared: libstorageprims_ffi.so
+            static: libstorageprims_ffi.a
           - runner: ubuntu-latest-arm64-s
             target: aarch64-unknown-linux-gnu
             platform: linux-arm64
             shared: libstorageprims_ffi.so
+            static: libstorageprims_ffi.a
           - runner: macos-15
             target: aarch64-apple-darwin
             platform: darwin-arm64
             shared: libstorageprims_ffi.dylib
+            static: libstorageprims_ffi.a
     defaults:
       run:
         shell: bash
@@ -91,12 +94,12 @@ jobs:
           package_dir="dist/package"
           archive="storageprims-ffi-${{ needs.validate.outputs.version }}-${{ matrix.platform }}.tar.gz"
           mkdir -p "$package_dir"
-          cp target/release/libstorageprims_ffi.a "$package_dir/"
+          cp "target/release/${{ matrix.static }}" "$package_dir/"
           cp "target/release/${{ matrix.shared }}" "$package_dir/"
           cp ffi/storageprims-ffi/storageprims.h "$package_dir/storageprims.h"
           cp LICENSE-MIT LICENSE-APACHE "$package_dir/"
           tar -czf "$archive" -C "$package_dir" \
-            LICENSE-APACHE LICENSE-MIT libstorageprims_ffi.a \
+            LICENSE-APACHE LICENSE-MIT "${{ matrix.static }}" \
             "${{ matrix.shared }}" storageprims.h
           source scripts/release-common.sh
           # shellcheck disable=SC2031
@@ -194,12 +197,7 @@ jobs:
           target_commitish: ${{ needs.validate.outputs.commit }}
           body_path: docs/releases/${{ github.ref_name }}.md
           files: |
-            dist/release/LICENSE-APACHE
-            dist/release/LICENSE-MIT
-            dist/release/sbom-${{ needs.validate.outputs.version }}.cdx.json
-            dist/release/storageprims-ffi-${{ needs.validate.outputs.version }}-darwin-arm64.tar.gz
-            dist/release/storageprims-ffi-${{ needs.validate.outputs.version }}-linux-amd64.tar.gz
-            dist/release/storageprims-ffi-${{ needs.validate.outputs.version }}-linux-arm64.tar.gz
+            dist/release/*
       - name: Verify exact draft state and remote inventory
         env:
           GH_TOKEN: ${{ github.token }}
