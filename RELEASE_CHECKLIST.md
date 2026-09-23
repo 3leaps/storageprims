@@ -15,7 +15,7 @@ signing keys and never publishes a GitHub release.
 Required ceremony variables:
 
 - `STORAGEPRIMS_RELEASE_TAG` — the sole canonical tag input, for example
-  `v0.1.0`
+  `v0.1.1` when `VERSION` contains `0.1.1`
 - `STORAGEPRIMS_MINISIGN_KEY` — minisign secret-key file outside the repository
 - `STORAGEPRIMS_MINISIGN_PUB` — explicit minisign public-key file
 
@@ -24,9 +24,13 @@ Optional PGP signing requires both `STORAGEPRIMS_PGP_KEY_ID` and
 
 ## 1. Write and prepare
 
-- [ ] Confirm `VERSION` is the intended stable version (`0.1.0` for the first
-      cut); do not bump it for the first cut
-- [ ] Run `make version-sync`
+- [ ] Confirm `VERSION` is the intended stable version for this cut
+- [ ] For a patch bump, run `make version-patch` (which runs
+      `make version-sync`); if setting `VERSION` directly, run
+      `make version-sync` afterward
+- [ ] Check release-tooling fixtures for hard-coded prior-version values;
+      update them or derive expected assets independently from `VERSION`.
+      Run `make release-tooling-test` and confirm mismatched tags fail
 - [ ] Update `CHANGELOG.md` and its comparison links
 - [ ] Update `RELEASE_NOTES.md`, newest first, retaining at most three cuts
 - [ ] Copy only the current section to `docs/releases/vX.Y.Z.md`
@@ -44,13 +48,13 @@ release-note extraction, a successful fetch, and exact equality between
 
 ## 2. Create the annotated tag and unsigned draft
 
-From clean `main`:
+Only after an explicit tag cue, from clean `main` at the preflighted commit:
 
 ```bash
-export STORAGEPRIMS_RELEASE_TAG=v0.1.0
+export STORAGEPRIMS_RELEASE_TAG="v$(cat VERSION)"
 make release-guard-tag-version
 git tag -a "$STORAGEPRIMS_RELEASE_TAG" \
-  -m "$STORAGEPRIMS_RELEASE_TAG: first storageprims release"
+  -m "$STORAGEPRIMS_RELEASE_TAG: storageprims release"
 git push origin "$STORAGEPRIMS_RELEASE_TAG"
 ```
 
