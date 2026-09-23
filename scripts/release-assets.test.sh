@@ -3,11 +3,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(git rev-parse --show-toplevel)"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-release-assets.XXXXXX")"
 payload="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-release-payload.XXXXXX")"
 trap 'rm -rf "$fixture" "$payload"' EXIT
 
-export STORAGEPRIMS_RELEASE_TAG="v0.1.0"
+version="$(cat "$root/VERSION")"
+[[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+	echo "error: fixture requires a stable VERSION" >&2
+	exit 1
+}
+export STORAGEPRIMS_RELEASE_TAG="v${version}"
 
 expect_fail() {
 	if "$@" >/dev/null 2>&1; then
@@ -18,7 +24,7 @@ expect_fail() {
 
 printf 'license\n' >"$fixture/LICENSE-APACHE"
 printf 'license\n' >"$fixture/LICENSE-MIT"
-printf '{}\n' >"$fixture/sbom-0.1.0.cdx.json"
+printf '{}\n' >"$fixture/sbom-${version}.cdx.json"
 
 make_archive() {
 	local platform="$1"
@@ -30,7 +36,7 @@ make_archive() {
 	printf 'header\n' >"$payload/storageprims.h"
 	printf 'license\n' >"$payload/LICENSE-MIT"
 	printf 'license\n' >"$payload/LICENSE-APACHE"
-	tar -czf "$fixture/storageprims-ffi-0.1.0-${platform}.tar.gz" \
+	tar -czf "$fixture/storageprims-ffi-${version}-${platform}.tar.gz" \
 		-C "$payload" \
 		LICENSE-APACHE LICENSE-MIT libstorageprims_ffi.a \
 		"$shared" storageprims.h
@@ -40,6 +46,9 @@ make_archive darwin-arm64 libstorageprims_ffi.dylib
 make_archive linux-amd64 libstorageprims_ffi.so
 make_archive linux-arm64 libstorageprims_ffi.so
 "$SCRIPT_DIR/validate-release-assets.sh" "$fixture" base >/dev/null
+wrong_tag="v${version%.*}.$((${version##*.} + 1))"
+expect_fail env STORAGEPRIMS_RELEASE_TAG="$wrong_tag" \
+	"$SCRIPT_DIR/validate-release-assets.sh" "$fixture" base
 
 printf 'stale\n' >"$fixture/foreign.txt"
 expect_fail "$SCRIPT_DIR/validate-release-assets.sh" "$fixture" base
@@ -53,14 +62,14 @@ printf 'shared\n' >"$payload/libstorageprims_ffi.so"
 printf 'header\n' >"$payload/storageprims.h"
 printf 'license\n' >"$payload/LICENSE-MIT"
 printf 'license\n' >"$payload/LICENSE-APACHE"
-tar -czf "$fixture/storageprims-ffi-0.1.0-linux-amd64.tar.gz" \
+tar -czf "$fixture/storageprims-ffi-${version}-linux-amd64.tar.gz" \
 	-C "$payload" \
 	LICENSE-APACHE LICENSE-MIT libstorageprims_ffi.a \
 	libstorageprims_ffi.so storageprims.h
 expect_fail "$SCRIPT_DIR/validate-release-assets.sh" "$fixture" base
 
 make_archive linux-amd64 libstorageprims_ffi.so
-python3 - "$fixture/storageprims-ffi-0.1.0-linux-amd64.tar.gz" \
+python3 - "$fixture/storageprims-ffi-${version}-linux-amd64.tar.gz" \
 	"$payload" <<'PY'
 import io
 import sys
@@ -83,22 +92,22 @@ PY
 expect_fail "$SCRIPT_DIR/validate-release-assets.sh" "$fixture" base
 
 make_archive linux-amd64 libstorageprims_ffi.so
-printf 'notes\n' >"$fixture/release-notes-v0.1.0.md"
+printf 'notes\n' >"$fixture/release-notes-${STORAGEPRIMS_RELEASE_TAG}.md"
 (
 	cd "$fixture"
 	printf '%s\n' \
-		LICENSE-APACHE LICENSE-MIT release-notes-v0.1.0.md \
-		sbom-0.1.0.cdx.json \
-		storageprims-ffi-0.1.0-darwin-arm64.tar.gz \
-		storageprims-ffi-0.1.0-linux-amd64.tar.gz \
-		storageprims-ffi-0.1.0-linux-arm64.tar.gz |
+		LICENSE-APACHE LICENSE-MIT "release-notes-${STORAGEPRIMS_RELEASE_TAG}.md" \
+		"sbom-${version}.cdx.json" \
+		"storageprims-ffi-${version}-darwin-arm64.tar.gz" \
+		"storageprims-ffi-${version}-linux-amd64.tar.gz" \
+		"storageprims-ffi-${version}-linux-arm64.tar.gz" |
 		LC_ALL=C sort | xargs shasum -a 256 >SHA256SUMS
 	printf '%s\n' \
-		LICENSE-APACHE LICENSE-MIT release-notes-v0.1.0.md \
-		sbom-0.1.0.cdx.json \
-		storageprims-ffi-0.1.0-darwin-arm64.tar.gz \
-		storageprims-ffi-0.1.0-linux-amd64.tar.gz \
-		storageprims-ffi-0.1.0-linux-arm64.tar.gz |
+		LICENSE-APACHE LICENSE-MIT "release-notes-${STORAGEPRIMS_RELEASE_TAG}.md" \
+		"sbom-${version}.cdx.json" \
+		"storageprims-ffi-${version}-darwin-arm64.tar.gz" \
+		"storageprims-ffi-${version}-linux-amd64.tar.gz" \
+		"storageprims-ffi-${version}-linux-arm64.tar.gz" |
 		LC_ALL=C sort | xargs shasum -a 512 >SHA512SUMS
 )
 "$SCRIPT_DIR/verify-checksums.sh" "$fixture" >/dev/null
