@@ -148,12 +148,24 @@ main() {
 			echo 'error: annotated tag required' >&2
 			exit 1
 		}
-		local message
-		message="$(git cat-file tag "$verify_object" | sed -n '/^$/,$p' | sed '1d; /^-----BEGIN PGP SIGNATURE-----$/,$d')"
-		[[ "$message" == *$'\n\n'"$(policy_attestation)" ]] || {
+		local message_file expected_file actual_tail suffix_size
+		ruleset_tmp="$(mktemp -d)"
+		trap 'rm -rf "$ruleset_tmp"' EXIT
+		message_file="$ruleset_tmp/message"
+		expected_file="$ruleset_tmp/expected"
+		actual_tail="$ruleset_tmp/tail"
+		"$(dirname "$0")/release-tag-body.sh" "$verify_object" >"$message_file"
+		printf '\n\n%s\n' "$(policy_attestation)" >"$expected_file"
+		suffix_size="$(wc -c <"$expected_file" | tr -d '[:space:]')"
+		if [[ "$(wc -c <"$message_file" | tr -d '[:space:]')" -lt "$suffix_size" ]]; then
 			echo 'error: signed policy attestation missing or mismatched' >&2
 			exit 1
-		}
+		fi
+		tail -c "$suffix_size" "$message_file" >"$actual_tail"
+		if ! cmp -s "$expected_file" "$actual_tail"; then
+			echo 'error: signed policy attestation missing or mismatched' >&2
+			exit 1
+		fi
 	fi
 
 	if [ "${print_attestation}" -eq 1 ]; then

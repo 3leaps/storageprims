@@ -104,18 +104,28 @@ git -C "$scratch/repo" tag -a v1.2.3 -m 'Release v1.2.3' -m "$attestation"
 )
 git -C "$scratch/repo" update-ref refs/remotes/origin/main "$(git -C "$scratch/repo" rev-parse HEAD)"
 git -C "$scratch/repo" tag -d v1.2.3 >/dev/null
+printf 'Release v1.2.3\n\n%s\n' "$attestation" >"$scratch/expected-message"
+printf 'Changed message\n\n%s\n' "$attestation" >"$scratch/wrong-message"
 (
 	cd "$scratch/repo"
 	GIT_COMMITTER_NAME="$STORAGEPRIMS_TAGGER_NAME" GIT_COMMITTER_EMAIL="$STORAGEPRIMS_TAGGER_EMAIL" \
-		git tag -a v1.2.3 -m 'Release v1.2.3' -m "$attestation"
+		git tag -a --cleanup=verbatim v1.2.3 -F "$scratch/expected-message"
 )
 (
 	cd "$scratch/repo"
-	tag_verify_object refs/tags/v1.2.3 "$(printf 'Release v1.2.3\n\n%s' "$attestation")"
+	tag_verify_object refs/tags/v1.2.3 "$scratch/expected-message"
 )
 (
 	cd "$scratch/repo"
-	expect_fail tag_verify_object refs/tags/v1.2.3 "$(printf 'Changed message\n\n%s' "$attestation")"
+	expect_fail tag_verify_object refs/tags/v1.2.3 "$scratch/wrong-message"
+)
+printf 'Release v1.2.3\n\n%s\n\n\n' "$attestation" >"$scratch/extra-blank-lines"
+(
+	cd "$scratch/repo"
+	GIT_COMMITTER_NAME="$STORAGEPRIMS_TAGGER_NAME" GIT_COMMITTER_EMAIL="$STORAGEPRIMS_TAGGER_EMAIL" \
+		git tag -fa --cleanup=verbatim v1.2.3 -F "$scratch/extra-blank-lines" >/dev/null
+	expect_fail tag_verify_object refs/tags/v1.2.3 "$scratch/expected-message"
+	expect_fail "$root/scripts/release-guard-tag-ruleset.sh" --verify-tag-attestation refs/tags/v1.2.3
 )
 git -C "$scratch/repo" tag -f -a v1.2.3 -m 'Release v1.2.3' -m 'Tag-Publish-Policy-SHA256: stale' >/dev/null
 (

@@ -62,18 +62,19 @@ git -C "$fixture" update-ref refs/remotes/origin/main "$(git -C "$fixture" rev-p
 source "$root/scripts/release-tag-common.sh"
 (
 	cd "$fixture"
-	tag_verify_object refs/tags/v1.2.3 'Fixture release'
+	tag_verify_object refs/tags/v1.2.3 "$scratch/message.txt"
 )
 (
 	cd "$fixture"
-	expect_fail tag_verify_object refs/tags/v1.2.3 'Tampered release'
+	printf 'Tampered release\n' >"$scratch/tampered.txt"
+	expect_fail tag_verify_object refs/tags/v1.2.3 "$scratch/tampered.txt"
 )
 printf '# Heading\nFixture release\n' >"$scratch/message.txt"
 (
 	cd "$fixture"
 	GIT_COMMITTER_NAME='3 Leaps Infosec Team' GIT_COMMITTER_EMAIL=infosec@3leaps.net \
 		git tag -fs -a --cleanup=verbatim -u "$subkey!" -F "$scratch/message.txt" "$STORAGEPRIMS_RELEASE_TAG"
-	tag_verify_object refs/tags/v1.2.3 $'# Heading\nFixture release'
+	tag_verify_object refs/tags/v1.2.3 "$scratch/message.txt"
 )
 verify >/dev/null
 printf 'Fixture release\n' >"$scratch/message.txt"

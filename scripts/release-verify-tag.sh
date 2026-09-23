@@ -9,7 +9,9 @@ tag_identity
 tag_selector_shape
 tag_checkout
 object="$(git rev-parse "refs/tags/$STORAGEPRIMS_RELEASE_TAG")"
-expected="$(tag_expected_message)"
+expected="$(mktemp)"
+trap 'rm -f "$expected"' EXIT
+tag_expected_message >"$expected"
 tag_verify_object "$object" "$expected"
 "$tag_root/scripts/verify-pinned-tag.sh"
 [[ "$(awk '$1=="gpg" {print $2}' keys/expected-fingerprints.txt)" == "$STORAGEPRIMS_GPG_SIGNING_FINGERPRINT" ]] || tag_die 'authorized primary differs from committed anchor'

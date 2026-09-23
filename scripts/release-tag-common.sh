@@ -143,14 +143,15 @@ tag_key_selector() {
 }
 
 tag_expected_message() {
-	local file policy
+	local file
 	file="$(tag_message_file)" || return 1
-	policy="$("$tag_root/scripts/release-guard-tag-ruleset.sh" --print-attestation)" || return 1
-	printf '%s\n\n%s\n' "$(cat "$file")" "$policy"
+	cat "$file"
+	printf '\n'
+	"$tag_root/scripts/release-guard-tag-ruleset.sh" --print-attestation
 }
 
 tag_verify_object() {
-	local object="$1" expected_message="$2" actual tagger
+	local object="$1" expected_file="$2" tagger actual_file
 	[[ "$(git cat-file -t "$object" 2>/dev/null)" == tag ]] || {
 		tag_die 'annotated tag object required'
 		return 1
@@ -172,9 +173,15 @@ tag_verify_object() {
 		tag_die 'tagger identity mismatch'
 		return 1
 	}
-	actual="$(git cat-file tag "$object" | sed -n '/^$/,$p' | sed '1d; /^-----BEGIN PGP SIGNATURE-----$/,$d')"
-	[[ "$actual" == "$(printf '%s' "$expected_message")" ]] || {
+	actual_file="$(mktemp)"
+	if ! "$tag_root/scripts/release-tag-body.sh" "$object" >"$actual_file"; then
+		rm -f "$actual_file"
+		return 1
+	fi
+	if ! cmp -s "$expected_file" "$actual_file"; then
+		rm -f "$actual_file"
 		tag_die 'signed tag message mismatch'
 		return 1
-	}
+	fi
+	rm -f "$actual_file"
 }
