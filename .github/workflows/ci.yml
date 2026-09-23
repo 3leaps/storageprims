@@ -179,5 +179,13 @@ jobs:
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
           toolchain: 1.94.1
+      - name: Verify release tooling dependencies
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11)'
+          command -v jq
+          command -v cargo
+          command -v rg
       - name: Package workspace
         run: make release-check
+      - name: Release tooling tests
+        run: make release-tooling-test

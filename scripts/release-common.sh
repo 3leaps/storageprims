@@ -55,10 +55,11 @@ release_base_assets() {
 	printf '%s\n' \
 		"LICENSE-APACHE" \
 		"LICENSE-MIT" \
-		"sbom-${version}.cdx.json" \
-		"storageprims-ffi-${version}-darwin-arm64.tar.gz" \
-		"storageprims-ffi-${version}-linux-amd64.tar.gz" \
-		"storageprims-ffi-${version}-linux-arm64.tar.gz"
+		"sbom-${version}.cdx.json"
+	local platform shared static
+	while read -r platform shared static; do
+		printf 'storageprims-ffi-%s-%s.tar.gz\n' "$version" "$platform"
+	done <"$(release_repo_root)/config/release/ffi-platforms.txt"
 }
 
 release_signable_assets() {
@@ -147,26 +148,20 @@ assert_exact_directory_inventory() (
 
 validate_ffi_archive() (
 	local archive="$1"
-	local filename platform shared
+	local filename platform shared="" static candidate candidate_shared candidate_static
 	filename="$(basename "$archive")"
-	case "$filename" in
-	*-darwin-arm64.tar.gz)
-		platform="darwin-arm64"
-		shared="libstorageprims_ffi.dylib"
-		;;
-	*-linux-amd64.tar.gz)
-		platform="linux-amd64"
-		shared="libstorageprims_ffi.so"
-		;;
-	*-linux-arm64.tar.gz)
-		platform="linux-arm64"
-		shared="libstorageprims_ffi.so"
-		;;
-	*)
+	while read -r candidate candidate_shared candidate_static; do
+		if [[ "$filename" == "storageprims-ffi-$(release_version)-${candidate}.tar.gz" ]]; then
+			platform="$candidate"
+			shared="$candidate_shared"
+			static="$candidate_static"
+			break
+		fi
+	done <"$(release_repo_root)/config/release/ffi-platforms.txt"
+	if [[ -z "$shared" ]]; then
 		echo "error: unexpected FFI archive name" >&2
 		return 1
-		;;
-	esac
+	fi
 
 	local expected members listing
 	expected="$(mktemp "${TMPDIR:-/tmp}/storageprims-archive-expected.XXXXXX")"
@@ -177,7 +172,7 @@ validate_ffi_archive() (
 	printf '%s\n' \
 		"LICENSE-APACHE" \
 		"LICENSE-MIT" \
-		"libstorageprims_ffi.a" \
+		"$static" \
 		"$shared" \
 		"storageprims.h" |
 		LC_ALL=C sort >"$expected"
@@ -206,11 +201,11 @@ validate_all_ffi_archives() {
 	local directory="$1"
 	local version
 	version="$(release_version)"
-	local platform
-	for platform in darwin-arm64 linux-amd64 linux-arm64; do
+	local platform shared static
+	while read -r platform shared static; do
 		validate_ffi_archive \
 			"$directory/storageprims-ffi-${version}-${platform}.tar.gz"
-	done
+	done <"$(release_repo_root)/config/release/ffi-platforms.txt"
 }
 
 assert_github_release_state() (

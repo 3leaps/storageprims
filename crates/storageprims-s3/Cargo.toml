@@ -12,6 +12,9 @@ documentation = "https://docs.rs/storageprims-s3"
 readme = "README.md"
 publish = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 integration = []
 
