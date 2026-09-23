@@ -3,7 +3,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(git rev-parse --show-toplevel)"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-release-safety.XXXXXX")"
 trap 'rm -rf "$fixture"' EXIT
 
@@ -14,11 +13,16 @@ expect_fail() {
 	fi
 }
 
-expect_fail "$SCRIPT_DIR/release-clean.sh" /
-mkdir -p "$root/dist"
-ln -s "$fixture/outside" "$root/dist/release"
-expect_fail "$SCRIPT_DIR/release-clean.sh"
-rm -f "$root/dist/release"
+root="$fixture/repo"
+git init -q -b main "$root"
+(
+	cd "$root"
+	expect_fail "$SCRIPT_DIR/release-clean.sh" /
+	mkdir -p dist
+	ln -s "$fixture/outside" dist/release
+	expect_fail "$SCRIPT_DIR/release-clean.sh"
+	[[ -L dist/release ]]
+)
 
 source_dir="$fixture/source"
 libdir="$fixture/lib"

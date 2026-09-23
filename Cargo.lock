@@ -1988,7 +1988,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storageprims-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "serde",
@@ -1999,7 +1999,7 @@ dependencies = [
 
 [[package]]
 name = "storageprims-ffi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aws-credential-types",
  "aws-sdk-s3",
@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "storageprims-ops"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "serde",
@@ -2029,7 +2029,7 @@ dependencies = [
 
 [[package]]
 name = "storageprims-s3"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aws-config",
  "aws-credential-types",

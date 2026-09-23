@@ -174,7 +174,7 @@ storageprims list semantic.
 ### Cons
 
 - Consumers wanting durable resume/checkpoint semantics must build them above the library.
-- Delimiter/common-prefix semantics still need a follow-on decision.
+- Delimiter/common-prefix semantics are defined in [DDR-0010: Delimiter Listing Contract](DDR-0010-delimiter-listing-contract.md).
 - Different providers may still exhibit different real-world mutation behavior during long listings.
 
 ## Alternatives Considered
