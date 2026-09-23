@@ -1,8 +1,10 @@
 # Release Checklist
 
-This checklist covers release preparation, the annotated tag and unsigned
+This checklist covers release preparation, the signed tag and unsigned
 draft, and the later maintainer MFA signing ceremony. CI never receives
 signing keys and never publishes a GitHub release.
+Earlier unsigned annotated tags remain historical; signing begins with the
+first cut using this gate.
 
 ## Prerequisites
 
@@ -18,9 +20,17 @@ Required ceremony variables:
   `v0.1.1` when `VERSION` contains `0.1.1`
 - `STORAGEPRIMS_MINISIGN_KEY` — minisign secret-key file outside the repository
 - `STORAGEPRIMS_MINISIGN_PUB` — explicit minisign public-key file
+- `STORAGEPRIMS_TAG_MESSAGE_DIR` — external per-cut directory ending in the
+  canonical tag; its only message input is `message.txt`
+- `STORAGEPRIMS_TAGGER_NAME` / `STORAGEPRIMS_TAGGER_EMAIL` — fixed infosec
+  tagger identity (`3 Leaps Infosec Team <infosec@3leaps.net>`)
+- `STORAGEPRIMS_GPG_SIGNING_FINGERPRINT` — full 40-hex authorized primary
+  fingerprint; `STORAGEPRIMS_PGP_KEY_ID` selects an exact 40-hex signing
+  subkey with a trailing `!`
 
-Optional PGP signing requires both `STORAGEPRIMS_PGP_KEY_ID` and
-`STORAGEPRIMS_GPG_HOMEDIR`. Partial configuration fails closed.
+GPG tag signing requires `STORAGEPRIMS_PGP_KEY_ID` and
+`STORAGEPRIMS_GPG_HOMEDIR`. Both manifest signatures are made during the
+subsequent maintainer ceremony. Partial configuration fails closed.
 
 ## 1. Write and prepare
 
@@ -40,25 +50,31 @@ Optional PGP signing requires both `STORAGEPRIMS_PGP_KEY_ID` and
 - [ ] Commit the release preparation and merge it through the normal review
       process
 - [ ] Confirm required CI on `main` is green
+- [ ] Confirm the reviewed public pin and decernor-generated anchor pair are
+      committed; Dave generates them with `make release-insert-anchors` using
+      `DECERNOR_BIN` (absolute executable) or `decernor` on `PATH`, version
+      0.1.7 or newer. No sibling repository path is inferred
 - [ ] From a clean, freshly fetched `main`, run `make release-preflight`
 
 The preflight requires a clean tree, the full `make pr-final` gate, exact
 release-note extraction, a successful fetch, and exact equality between
 `HEAD` and fetched `origin/main`.
 
-## 2. Create the annotated tag and unsigned draft
+## 2. Create the signed tag and unsigned draft
 
 Only after an explicit tag cue, from clean `main` at the preflighted commit:
 
 ```bash
-export STORAGEPRIMS_RELEASE_TAG="v$(cat VERSION)"
-make release-guard-tag-version
-git tag -a "$STORAGEPRIMS_RELEASE_TAG" \
-  -m "$STORAGEPRIMS_RELEASE_TAG: storageprims release"
-git push origin "$STORAGEPRIMS_RELEASE_TAG"
+: "${STORAGEPRIMS_RELEASE_TAG:?load the approved cut}"
+: "${STORAGEPRIMS_TAG_MESSAGE_DIR:?load the external per-cut message dir}"
+test -s "${STORAGEPRIMS_TAG_MESSAGE_DIR}/message.txt"
+make release-tag          # creates and verifies locally, no push
+make release-push-tag     # explicit maintainer action; verifies remote object
 ```
 
 - [ ] Confirm the tag workflow is green
+- [ ] Confirm the tag has GitHub **Verified** status and the
+      `verify-signature` gate passed before a draft is created
 - [ ] Confirm the GitHub release is still a draft
 - [ ] Confirm it contains the FFI archives from
       `config/release/ffi-platforms.txt`, CycloneDX SBOM, and both licenses
@@ -80,6 +96,8 @@ git fetch origin \
   "+refs/tags/${STORAGEPRIMS_RELEASE_TAG}:refs/tags/${STORAGEPRIMS_RELEASE_TAG}"
 git checkout --detach "$STORAGEPRIMS_RELEASE_TAG"
 STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
+make release-verify-tag
+make release-verify-remote-tag
 make release
 ```
 
@@ -87,7 +105,7 @@ make release
 
 1. Safely empty the repository-owned `dist/release`
 2. Download and structurally validate the exact unsigned draft assets
-3. Add the exact per-cut release notes
+3. Add the exact per-cut release notes and staged public fingerprint anchors
 4. Generate exact SHA-256 and SHA-512 manifests
 5. Sign both manifests
 6. Export and prove public verification keys
@@ -114,6 +132,8 @@ dev dependencies.
 
 After the tag exists on origin, use a clean detached checkout of the exact
 tag and recheck `STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version`.
+Re-run `make release-verify-remote-tag` before the dry run and each registry
+publication. The signed tag is the provenance root for registry publication.
 Run `make release-crates-dry-run` for all publishable crates. This uses local
 path patches only for earlier workspace crates that have not yet reached the
 registry; it does not upload them. Optionally confirm that
@@ -149,3 +169,20 @@ version on the crates.io API. The final command rechecks the entire list. Never 
 registry pages and docs.rs builds after the final check. If the tag Release
 workflow's package check failed while registry dependencies were unavailable,
 rerun it after the index exposes this version, before signing the draft.
+
+## Rotate release signing keys
+
+Before the first cut with a new key, generate a new public export and anchors
+under maintainer identity and land both through a reviewed PR. CI must see the
+new pinned public key _in the tagged commit_; an account-level GitHub Verified
+indicator alone cannot authorize a release. Re-derive both fingerprint records
+with `decernor fingerprint`, review the primary/subkey relationship, and confirm
+the tagger account has the matching public key and verified email. Check the
+primary and signing-subkey expiration with:
+
+```bash
+gpg --homedir "$STORAGEPRIMS_GPG_HOMEDIR" --list-keys --with-subkey-fingerprint --with-colons "$STORAGEPRIMS_GPG_SIGNING_FINGERPRINT"
+```
+
+An expired key is a rotation nobody scheduled. Do not sign or publish until a
+reviewed replacement pin is on `main` and the tag ruleset is active.

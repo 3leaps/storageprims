@@ -65,11 +65,16 @@ main() {
 			exit 1
 			;;
 		esac
-		git fetch --quiet origin \
-			"+refs/heads/main:refs/remotes/origin/main" \
-			"+refs/tags/${tag}:refs/tags/${tag}"
+		git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main"
 		if [[ "$(git cat-file -t "refs/tags/$tag" 2>/dev/null || true)" != "tag" ]]; then
 			echo "error: strict release tag must be annotated" >&2
+			exit 1
+		fi
+		local remote_object local_object
+		remote_object="$(git ls-remote origin "refs/tags/${tag}" | awk '{print $1}')"
+		local_object="$(git rev-parse "refs/tags/${tag}")"
+		if [[ -z "$remote_object" || "$remote_object" != "$local_object" ]]; then
+			echo "error: remote and local annotated tag objects must match" >&2
 			exit 1
 		fi
 		local tag_commit head_commit main_commit

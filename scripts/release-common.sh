@@ -67,6 +67,7 @@ release_signable_assets() {
 	tag="$(release_tag)"
 	release_base_assets
 	printf 'release-notes-%s.md\n' "$tag"
+	printf '%s\n' expected-fingerprints.txt expected-fingerprints.ndjson
 }
 
 release_provenance_assets() {

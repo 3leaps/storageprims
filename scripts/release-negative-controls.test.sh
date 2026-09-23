@@ -34,6 +34,27 @@ fail_if_found \
 	Makefile scripts .github/workflows/release.yml
 "$root/scripts/check-public-source.sh"
 
+if [[ "$#" == 0 ]]; then
+	workflow=.github/workflows/release.yml
+	awk '
+		/^  verify-signature:/ {signature=1; seen=1; next}
+		/^  [a-z-]+:/ && signature {signature=0}
+		signature && /contents: write|secrets\./ {exit 1}
+		END {if (!seen) exit 1}
+	' "$workflow" || {
+		echo 'error: signed-tag verification must be read-only' >&2
+		exit 1
+	}
+	awk '
+		/^  draft:/ {draft=1; next}
+		draft && /needs: \[validate, verify-signature, build-ffi, sbom\]/ {found=1}
+		END {exit !found}
+	' "$workflow" || {
+		echo 'error: draft must depend on signed-tag verification' >&2
+		exit 1
+	}
+fi
+
 mutation_count="$(rg -U -o \
 	'gh release (upload|edit)[^\n]*(\n[^\n]*){0,2}--repo "\$STORAGEPRIMS_REPOSITORY"' \
 	scripts/upload-release-assets.sh | rg -o 'gh release' | wc -l | tr -d ' ')"

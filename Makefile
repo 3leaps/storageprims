@@ -23,6 +23,7 @@
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
 .PHONY: release-crates-list release-crates-dry-run release-crates-verify
+.PHONY: release-tag release-push-tag release-verify-tag release-insert-anchors
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -547,6 +548,7 @@ release-crates-verify: ## Wait for the final registry version and verify each pu
 	@CRATE="$(CRATE)" ./scripts/release-crates-verify.sh
 
 release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
+	@./scripts/release-tag-controls.test.sh
 	@./scripts/release-crates.test.sh
 	@./scripts/release-crates-verify.test.sh
 	@./scripts/release-guard-tag-version.test.sh
@@ -557,6 +559,10 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@echo "[ok] Release tooling tests passed"
 
 release-preflight: ## Verify clean-tree pre-tag requirements
+	@test -s docs/security/release-signing-keys.asc && \
+		test -s keys/expected-fingerprints.txt && \
+		test -s keys/expected-fingerprints.ndjson || \
+		{ echo '[!!] Committed release pins are required'; exit 1; }
 	@echo "Running release preflight checks..."
 	@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
 		echo "[!!] Working tree not clean - commit or stash changes first"; \
@@ -582,6 +588,18 @@ release-preflight: ## Verify clean-tree pre-tag requirements
 release-guard-tag-version: ## Validate the canonical release tag
 	@./scripts/release-guard-tag-version.sh
 
+release-tag: ## Create and verify a local signed version tag
+	@./scripts/release-tag.sh
+
+release-push-tag: ## Publish and verify the signed version tag
+	@./scripts/release-push-tag.sh
+
+release-verify-tag: ## Verify the tag using only the committed public pin
+	@./scripts/release-verify-tag.sh
+
+release-insert-anchors: ## Maintainer-only: generate and review public fingerprint anchors
+	@./scripts/release-insert-anchors.sh
+
 release-clean: ## Safely empty the repository release staging directory
 	@./scripts/release-clean.sh "$(RELEASE_DIR)"
 
@@ -595,6 +613,7 @@ release-notes: ## Add the exact per-cut notes to the signable asset set
 	@./scripts/validate-release-assets.sh "$(RELEASE_DIR)" base >/dev/null
 	@cp "docs/releases/$${STORAGEPRIMS_RELEASE_TAG}.md" \
 		"$(RELEASE_DIR)/release-notes-$${STORAGEPRIMS_RELEASE_TAG}.md"
+	@./scripts/stage-release-anchors.sh "$(RELEASE_DIR)"
 	@./scripts/validate-release-assets.sh "$(RELEASE_DIR)" signable >/dev/null
 	@echo "[ok] Per-cut release notes added to the signed set"
 
