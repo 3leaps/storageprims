@@ -65,7 +65,7 @@ main() {
 			exit 1
 			;;
 		esac
-		git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main"
+		git fetch --quiet --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
 		if [[ "$(git cat-file -t "refs/tags/$tag" 2>/dev/null || true)" != "tag" ]]; then
 			echo "error: strict release tag must be annotated" >&2
 			exit 1

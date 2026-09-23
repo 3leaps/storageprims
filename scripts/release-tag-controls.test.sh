@@ -2,8 +2,31 @@
 # shellcheck disable=SC2016
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
+while IFS= read -r target; do
+	grep -Eq "^${target}:" "$root/Makefile" || {
+		echo 'error: release checklist names a missing make target' >&2
+		exit 1
+	}
+done < <(grep -oE 'make [a-z][a-z0-9-]+' "$root/RELEASE_CHECKLIST.md" | awk '{print $2}' | sort -u)
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
+mkdir -p "$scratch/anchor-stage" "$scratch/anchor-dest"
+for ext in txt ndjson; do
+	printf 'new\n' >"$scratch/anchor-stage/expected-fingerprints.$ext"
+	printf 'old\n' >"$scratch/anchor-dest/expected-fingerprints.$ext"
+done
+if STORAGEPRIMS_TEST_FAIL_ANCHOR_INSTALL=1 "$root/scripts/install-release-anchors.sh" \
+	"$scratch/anchor-stage" "$scratch/anchor-dest" >/dev/null 2>&1; then
+	echo 'error: expected pair rollback' >&2
+	exit 1
+fi
+for ext in txt ndjson; do
+	[[ "$(cat "$scratch/anchor-dest/expected-fingerprints.$ext")" == old ]]
+done
+"$root/scripts/install-release-anchors.sh" "$scratch/anchor-stage" "$scratch/anchor-dest"
+for ext in txt ndjson; do
+	[[ "$(cat "$scratch/anchor-dest/expected-fingerprints.$ext")" == new ]]
+done
 mkdir -p "$scratch/v1.2.3"
 printf 'Release v1.2.3\n' >"$scratch/v1.2.3/message.txt"
 export STORAGEPRIMS_RELEASE_TAG=v1.2.3
@@ -18,6 +41,8 @@ fi; }
 tag_identity
 [[ "$(tag_message_file)" == "$scratch/v1.2.3/message.txt" ]]
 printf 'Release v1.2.3' >"$scratch/v1.2.3/message.txt"
+expect_fail tag_message_file
+printf 'Release v1.2.3  \n' >"$scratch/v1.2.3/message.txt"
 expect_fail tag_message_file
 printf 'Release v1.2.3\n' >"$scratch/v1.2.3/message.txt"
 expect_fail env STORAGEPRIMS_TAGGER_NAME=$'bad\nname' bash -c 'source "$1"; tag_identity' _ "$root/scripts/release-tag-common.sh"
@@ -55,6 +80,21 @@ cat >"$RULESET_FIXTURE" <<'JSON'
 {"name":"Tag Publish Protection","source_type":"Repository","source":"3leaps/storageprims","target":"tag","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["refs/tags/v*"]}},"rules":[{"type":"creation"},{"type":"deletion"},{"type":"non_fast_forward"},{"type":"update"}],"bypass_actors":[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"always"}]}
 JSON
 "$root/scripts/release-guard-tag-ruleset.sh" --read-only >/dev/null
+for hidden in absent empty; do
+	if [[ "$hidden" == absent ]]; then
+		jq 'del(.bypass_actors)' "$scratch/ruleset.json" >"$scratch/hidden.json"
+	else
+		jq '.bypass_actors = []' "$scratch/ruleset.json" >"$scratch/hidden.json"
+	fi
+	export RULESET_FIXTURE="$scratch/hidden.json"
+	"$root/scripts/release-guard-tag-ruleset.sh" --read-only >/dev/null
+	expect_fail "$root/scripts/release-guard-tag-ruleset.sh"
+done
+export RULESET_FIXTURE="$scratch/ruleset.json"
+jq '.bypass_actors = [{"actor_id":2,"actor_type":"Team","bypass_mode":"always"}]' "$RULESET_FIXTURE" >"$scratch/wrong-actor.json"
+export RULESET_FIXTURE="$scratch/wrong-actor.json"
+expect_fail "$root/scripts/release-guard-tag-ruleset.sh" --read-only
+export RULESET_FIXTURE="$scratch/ruleset.json"
 attestation="$("$root/scripts/release-guard-tag-ruleset.sh" --print-attestation)"
 git -C "$scratch/repo" tag -d v1.2.3 >/dev/null
 git -C "$scratch/repo" tag -a v1.2.3 -m 'Release v1.2.3' -m "$attestation"

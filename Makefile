@@ -23,7 +23,7 @@
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
 .PHONY: release-crates-list release-crates-dry-run release-crates-verify
-.PHONY: release-tag release-push-tag release-verify-tag release-insert-anchors
+.PHONY: release-tag release-push-tag release-verify-tag release-verify-remote-tag release-insert-anchors
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -549,6 +549,7 @@ release-crates-verify: ## Wait for the final registry version and verify each pu
 
 release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-tag-controls.test.sh
+	@./scripts/verify-pinned-tag.test.sh
 	@./scripts/release-crates.test.sh
 	@./scripts/release-crates-verify.test.sh
 	@./scripts/release-guard-tag-version.test.sh
@@ -559,10 +560,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@echo "[ok] Release tooling tests passed"
 
 release-preflight: ## Verify clean-tree pre-tag requirements
-	@test -s docs/security/release-signing-keys.asc && \
-		test -s keys/expected-fingerprints.txt && \
-		test -s keys/expected-fingerprints.ndjson || \
-		{ echo '[!!] Committed release pins are required'; exit 1; }
+	@./scripts/validate-release-anchors.sh
 	@echo "Running release preflight checks..."
 	@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
 		echo "[!!] Working tree not clean - commit or stash changes first"; \
@@ -596,6 +594,9 @@ release-push-tag: ## Publish and verify the signed version tag
 
 release-verify-tag: ## Verify the tag using only the committed public pin
 	@./scripts/release-verify-tag.sh
+
+release-verify-remote-tag: ## Compare local and remote tag objects and GitHub verification
+	@./scripts/release-verify-remote-tag.sh
 
 release-insert-anchors: ## Maintainer-only: generate and review public fingerprint anchors
 	@./scripts/release-insert-anchors.sh

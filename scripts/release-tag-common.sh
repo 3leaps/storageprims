@@ -10,8 +10,7 @@ tag_die() {
 }
 
 tag_identity() {
-	[[ "${STORAGEPRIMS_TAGGER_NAME:-}" == '3 Leaps Infosec Team' &&
-		"${STORAGEPRIMS_TAGGER_EMAIL:-}" == 'infosec@3leaps.net' ]] || {
+	[[ "${STORAGEPRIMS_TAGGER_NAME:-} <${STORAGEPRIMS_TAGGER_EMAIL:-}>" == "$(cat "$tag_root/config/release/tagger-identity.txt")" ]] || {
 		tag_die 'infosec tagger identity required'
 		return 1
 	}
@@ -65,7 +64,8 @@ try:
     data.decode('utf-8')
 except UnicodeError:
     raise SystemExit(1)
-if b'\x00' in data or b'\r' in data or not data.endswith(b'\n') or data.endswith(b'\n\n'):
+if (b'\x00' in data or b'\r' in data or not data.endswith(b'\n')
+        or data.endswith(b'\n\n') or any(line.rstrip(b' \t') != line for line in data.splitlines())):
     raise SystemExit(1)
 PY
 		tag_die 'message.txt must be UTF-8 with exactly one final newline'
@@ -115,6 +115,11 @@ tag_selector_shape() {
 
 tag_key_selector() {
 	tag_selector_shape || return 1
+	"$tag_root/scripts/validate-release-anchors.sh" >/dev/null
+	[[ "$(awk '$1=="gpg" {print $2}' "$tag_root/keys/expected-fingerprints.txt")" == "$STORAGEPRIMS_GPG_SIGNING_FINGERPRINT" ]] || {
+		tag_die 'operator fingerprint differs from committed anchor'
+		return 1
+	}
 	[[ -n "${STORAGEPRIMS_GPG_HOMEDIR:-}" && -d "$STORAGEPRIMS_GPG_HOMEDIR" ]] || {
 		tag_die 'external GPG home required'
 		return 1

@@ -53,6 +53,16 @@ expect_fail run_guard STORAGEPRIMS_RELEASE_TAG=v1.2.3 \
 git -C "$fixture" checkout -q --detach v1.2.3
 run_guard STORAGEPRIMS_RELEASE_TAG=v1.2.3 \
 	STORAGEPRIMS_REQUIRE_TAG=1 ./guard.sh >/dev/null
+original_tag="$(git -C "$fixture" rev-parse refs/tags/v1.2.3)"
+git -C "$fixture" tag -d v1.2.3 >/dev/null
+expect_fail run_guard STORAGEPRIMS_RELEASE_TAG=v1.2.3 \
+	STORAGEPRIMS_REQUIRE_TAG=1 ./guard.sh
+git -C "$fixture" update-ref refs/tags/v1.2.3 "$original_tag"
+git -C "$fixture" tag -fa v1.2.3 -m 'different object' HEAD
+git -C "$fixture" push -q --force origin refs/tags/v1.2.3
+git -C "$fixture" update-ref refs/tags/v1.2.3 "$original_tag"
+expect_fail run_guard STORAGEPRIMS_RELEASE_TAG=v1.2.3 \
+	STORAGEPRIMS_REQUIRE_TAG=1 ./guard.sh
 
 git -C "$fixture" checkout -q main
 printf 'next\n' >"$fixture/next"

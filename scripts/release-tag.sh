@@ -14,6 +14,6 @@ message="$(mktemp)"
 trap 'rm -f "$message"' EXIT
 tag_expected_message >"$message"
 export GIT_COMMITTER_NAME="$STORAGEPRIMS_TAGGER_NAME" GIT_COMMITTER_EMAIL="$STORAGEPRIMS_TAGGER_EMAIL"
-git tag -s -a -u "$STORAGEPRIMS_PGP_KEY_ID" -F "$message" "$STORAGEPRIMS_RELEASE_TAG" HEAD
+git tag -s -a --cleanup=verbatim -u "$STORAGEPRIMS_PGP_KEY_ID" -F "$message" "$STORAGEPRIMS_RELEASE_TAG" HEAD
 "$tag_root/scripts/release-verify-tag.sh"
 echo '[ok] signed tag is local only'

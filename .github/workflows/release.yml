@@ -63,36 +63,14 @@ jobs:
           STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          test -s docs/security/release-signing-keys.asc
+          ./scripts/verify-pinned-tag.sh
           EXPECTED_OBJECT="$(git rev-parse "refs/tags/$STORAGEPRIMS_RELEASE_TAG")"
-          test "$(git cat-file -t "$EXPECTED_OBJECT")" = tag
-          test "$(git rev-parse "$EXPECTED_OBJECT^{}")" = "$(git rev-parse HEAD)"
-          tagger="$(git cat-file tag "$EXPECTED_OBJECT" |
-            sed -n 's/^tagger \(.*\) [0-9][0-9]* [+-][0-9][0-9][0-9][0-9]$/\1/p')"
-          test "$tagger" = '3 Leaps Infosec Team <infosec@3leaps.net>'
-          keyring="$(mktemp -d)"
-          chmod 700 "$keyring"
-          trap 'rm -rf "$keyring"' EXIT
-          GNUPGHOME="$keyring" gpg --batch --quiet --import docs/security/release-signing-keys.asc
-          test "$(GNUPGHOME="$keyring" gpg --batch --with-colons --list-keys |
-            awk -F: '$1=="pub" {count++} END {print count+0}')" -eq 1
-          GNUPGHOME="$keyring" git verify-tag --raw "$EXPECTED_OBJECT" >"$keyring/status" 2>&1
-          fingerprint="$(awk '$1=="[GNUPG:]" && $2=="VALIDSIG" {print $3}' "$keyring/status")"
-          test -n "$fingerprint"
-          test "$(grep -c '^\[GNUPG:\] VALIDSIG ' "$keyring/status")" -eq 1
-          primary="$(awk '$1=="[GNUPG:]" && $2=="VALIDSIG" {print $NF}' "$keyring/status")"
-          pinned="$(awk '$1=="gpg" {print $2}' keys/expected-fingerprints.txt)"
-          test -n "$pinned"
-          test "$primary" = "$pinned"
-          test "$fingerprint" != "$primary"
-          test "$(GNUPGHOME="$keyring" gpg --batch --with-colons --fingerprint \
-            --list-keys | awk -F: '$1=="fpr" {print $10;exit}')" = "$primary"
           tag_json="$(gh api "repos/3leaps/storageprims/git/tags/$EXPECTED_OBJECT")"
           jq -e --arg tag "$STORAGEPRIMS_RELEASE_TAG" --arg commit "$(git rev-parse HEAD)" \
             '.tag == $tag and .object.type == "commit" and .object.sha == $commit and
              .verification.verified == true and .verification.reason == "valid"' \
             <<<"$tag_json" >/dev/null
-          ./scripts/release-guard-tag-ruleset.sh --verify-tag-attestation "$EXPECTED_OBJECT"
+          ./scripts/release-guard-tag-ruleset.sh --read-only --verify-tag-attestation "$EXPECTED_OBJECT"
   build-ffi:
     name: FFI (${{ matrix.platform }})
     needs: validate

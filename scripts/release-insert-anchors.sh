@@ -46,7 +46,18 @@ if len(g) != 1 or len(m) != 1 or g[0].get('fingerprint_scheme') != 'openpgp-fing
     raise SystemExit('error: expected exactly one primary GPG and one minisign blob fingerprint')
 (base / 'expected-fingerprints.ndjson').write_text(''.join(json.dumps(r, separators=(',', ':')) + '\n' for r in (g[0], m[0])))
 (base / 'expected-fingerprints.txt').write_text('gpg ' + g[0]['fingerprint'] + '\nminisign ' + m[0]['fingerprint'] + '\n')
+(base / 'gpg.json').write_text(json.dumps(g[0]) + '\n')
+(base / 'minisign.json').write_text(json.dumps(m[0]) + '\n')
 PY
-mkdir -p keys
-cp "$scratch/expected-fingerprints.txt" "$scratch/expected-fingerprints.ndjson" keys/
+for kind in gpg minisign; do
+	"$DECERNOR_BIN" validate --schema "$root/schemas/fingerprint-record.v0.schema.json" \
+		--data "$scratch/$kind.json" >/dev/null
+done
+"$DECERNOR_BIN" fingerprint docs/security/release-signing-keys.asc --class public --kind gpg \
+	--format ndjson --path-mode none --gpg-role primary >"$scratch/gpg.verify.ndjson"
+"$DECERNOR_BIN" fingerprint "$STORAGEPRIMS_MINISIGN_PUB" --class public --kind minisign \
+	--format ndjson --path-mode none >"$scratch/minisign.verify.ndjson"
+cmp "$scratch/gpg.ndjson" "$scratch/gpg.verify.ndjson"
+cmp "$scratch/minisign.ndjson" "$scratch/minisign.verify.ndjson"
+"$root/scripts/install-release-anchors.sh" "$scratch" "$root/keys"
 echo '[ok] generated public fingerprint anchors for review'

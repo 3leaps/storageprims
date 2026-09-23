@@ -63,6 +63,7 @@ resolve_ruleset() {
 
 validate_ruleset() {
 	local ruleset="$1"
+	local mode="${2:-full}"
 	if ! printf '%s\n' "${ruleset}" | jq -e \
 		--arg name "${expected_ruleset_name}" \
 		--arg repository "${expected_repository}" '
@@ -74,30 +75,63 @@ validate_ruleset() {
             .conditions == {"ref_name":{"exclude":[],"include":["refs/tags/v*"]}} and
             (.rules | length) == 4 and
             ([.rules[].type] | sort) == ["creation","deletion","non_fast_forward","update"] and
-            all(.rules[]; (keys | sort) == ["type"]) and
-            .bypass_actors == [{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"always"}]
+            all(.rules[]; (keys | sort) == ["type"])
         ' >/dev/null; then
 		echo "error: live tag ruleset does not match the required publication policy" >&2
 		return 1
 	fi
+	local actors='[{"actor_id":null,"actor_type":"OrganizationAdmin","bypass_mode":"always"}]'
+	case "$mode" in
+	full)
+		jq -e --argjson actors "$actors" '.bypass_actors == $actors' >/dev/null <<<"$ruleset" || {
+			echo 'error: full ruleset must restrict bypass to organization administrators' >&2
+			return 1
+		}
+		;;
+	read-only)
+		jq -e --argjson actors "$actors" \
+			'(.bypass_actors == null) or (.bypass_actors == []) or (.bypass_actors == $actors)' \
+			>/dev/null <<<"$ruleset" || {
+			echo 'error: unexpected visible bypass actors' >&2
+			return 1
+		}
+		;;
+	*)
+		echo 'error: invalid ruleset validation mode' >&2
+		return 1
+		;;
+	esac
 }
 
 main() {
+	local mode=full
 	local print_attestation=0
 	local expected_attestation=0
 	local verify_object=""
-	if [ "${1:-}" = "--read-only" ]; then
-		print_attestation=0
-	elif [ "${1:-}" = "--verify-tag-attestation" ] && [ "$#" -eq 2 ]; then
-		verify_object="$2"
-	elif [ "${1:-}" = "--print-attestation" ]; then
-		print_attestation=1
-	elif [ "${1:-}" = "--expected-attestation" ]; then
-		expected_attestation=1
-	elif [ "$#" -ne 0 ]; then
-		echo "error: unknown argument: $1" >&2
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--read-only) mode=read-only ;;
+		--verify-tag-attestation)
+			shift
+			[[ -n "${1:-}" ]] || {
+				echo 'error: missing tag object' >&2
+				exit 1
+			}
+			verify_object="$1"
+			;;
+		--print-attestation) print_attestation=1 ;;
+		--expected-attestation) expected_attestation=1 ;;
+		*)
+			echo "error: unknown argument: $1" >&2
+			exit 1
+			;;
+		esac
+		shift
+	done
+	[[ "$print_attestation" -eq 0 || "$mode" == full ]] || {
+		echo 'error: full policy required for attestation' >&2
 		exit 1
-	fi
+	}
 
 	require_command jq
 	if [ "${expected_attestation}" -eq 1 ]; then
@@ -108,7 +142,7 @@ main() {
 
 	local ruleset
 	ruleset="$(resolve_ruleset)"
-	validate_ruleset "${ruleset}"
+	validate_ruleset "${ruleset}" "$mode"
 	if [ -n "$verify_object" ]; then
 		[ "$(git cat-file -t "$verify_object" 2>/dev/null)" = tag ] || {
 			echo 'error: annotated tag required' >&2
@@ -126,7 +160,7 @@ main() {
 		echo "[ok] tag ruleset matches the full publication policy" >&2
 		policy_attestation
 	else
-		echo "[ok] tag ruleset matches the full publication policy"
+		echo "[ok] tag ruleset matches the $mode publication policy"
 	fi
 }
 
