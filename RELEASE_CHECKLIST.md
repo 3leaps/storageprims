@@ -20,6 +20,9 @@ Required ceremony variables:
   `v0.1.1` when `VERSION` contains `0.1.1`
 - `STORAGEPRIMS_MINISIGN_KEY` — minisign secret-key file outside the repository
 - `STORAGEPRIMS_MINISIGN_PUB` — explicit minisign public-key file
+- `STORAGEPRIMS_DECERNOR_BIN` — absolute executable Decernor v0.1.8+ binary
+  selected by the maintainer; self-reported identity does not authenticate
+  the file, so bind it to a trusted tag-built regular file (not a symlink)
 - `STORAGEPRIMS_TAG_MESSAGE_DIR` — external per-cut directory ending in the
   canonical tag; its only message input is `message.txt`
 - `STORAGEPRIMS_TAGGER_NAME` / `STORAGEPRIMS_TAGGER_EMAIL` — fixed infosec

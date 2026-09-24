@@ -16,6 +16,16 @@ fail() {
 		exit 1
 	fi
 }
+expect_different() {
+	local status
+	if cmp -s "$1" "$2"; then
+		echo "error: expected distinct synthetic anchor files" >&2
+		exit 1
+	else
+		status=$?
+		[[ "$status" == 1 ]] || exit "$status"
+	fi
+}
 gpg --homedir "$fixture/home" --batch --pinentry-mode loopback --passphrase '' \
 	--quick-gen-key 'Synthetic release <synthetic@example.invalid>' ed25519 sign 1d >/dev/null 2>&1
 gpg --homedir "$fixture/home" --batch --armor --export >"$fixture/repo/docs/security/release-signing-keys.asc"
@@ -95,6 +105,12 @@ fail "$fixture/repo/scripts/verify-public-keys.sh" "$fixture/export"
 cp "$fixture/repo/docs/security/release-signing-keys.asc" "$fixture/export/storageprims-release-signing-key.asc"
 
 # A verifier failure after install must restore both old files, including their bytes.
+# First install a different, valid pair so a missing rollback cannot pass by
+# leaving the newly generated pair in place.
+cp "$fixture/repo/docs/security/release-signing-keys.asc" "$fixture/primary.asc"
+gpg --homedir "$fixture/other-home" --batch --armor --export >"$fixture/repo/docs/security/release-signing-keys.asc"
+STORAGEPRIMS_MINISIGN_PUB="$fixture/other.pub" "$fixture/repo/scripts/release-insert-anchors.sh" >/dev/null
+cp "$fixture/primary.asc" "$fixture/repo/docs/security/release-signing-keys.asc"
 cat >"$fixture/reject-verify" <<EOF
 #!/usr/bin/env bash
 if [[ "\$1 \${2:-}" == 'fingerprint verify' ]]; then exit 1; fi
@@ -103,9 +119,24 @@ EOF
 chmod +x "$fixture/reject-verify"
 cp "$fixture/repo/keys/expected-fingerprints.txt" "$fixture/old.txt"
 cp "$fixture/repo/keys/expected-fingerprints.ndjson" "$fixture/old.ndjson"
+expect_different "$fixture/old.txt" "$fixture/good.txt"
+expect_different "$fixture/old.ndjson" "$fixture/export/expected-fingerprints.ndjson"
 fail env STORAGEPRIMS_DECERNOR_BIN="$fixture/reject-verify" "$fixture/repo/scripts/release-insert-anchors.sh"
 cmp "$fixture/old.txt" "$fixture/repo/keys/expected-fingerprints.txt"
 cmp "$fixture/old.ndjson" "$fixture/repo/keys/expected-fingerprints.ndjson"
 fail "$fixture/repo/scripts/install-release-anchors.sh" "$fixture/repo/keys" "$fixture/new-keys" false
 [[ ! -e "$fixture/new-keys/expected-fingerprints.txt" && ! -e "$fixture/new-keys/expected-fingerprints.ndjson" ]]
+# Mutate only the isolated installer copy: the same rejection must now leave
+# the new pair behind, proving the preceding byte comparisons detect the loss.
+python3 - "$fixture/repo/scripts/install-release-anchors.sh" <<'PY'
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+assert "trap rollback EXIT" in text
+path.write_text(text.replace("trap rollback EXIT", "trap ':' EXIT", 1))
+PY
+fail env STORAGEPRIMS_DECERNOR_BIN="$fixture/reject-verify" "$fixture/repo/scripts/release-insert-anchors.sh"
+expect_different "$fixture/old.txt" "$fixture/repo/keys/expected-fingerprints.txt"
+expect_different "$fixture/old.ndjson" "$fixture/repo/keys/expected-fingerprints.ndjson"
 echo '[ok] Decernor ceremony identity, export verification, and rollback controls passed'

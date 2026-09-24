@@ -634,7 +634,7 @@ release-verify-checksums: ## Verify exact dual checksum manifests
 release-verify-signatures: ## Verify every configured signature
 	@./scripts/verify-signatures.sh "$(RELEASE_DIR)"
 
-release-verify-keys: ## Verify exported material contains public keys only
+release-verify-keys: ## Verify exported public keys against staged anchors
 	@./scripts/verify-public-keys.sh "$(RELEASE_DIR)"
 
 release-verify: release-verify-checksums release-verify-signatures release-verify-keys ## Verify signed release set
