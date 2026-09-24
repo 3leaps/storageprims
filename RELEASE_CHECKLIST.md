@@ -52,8 +52,9 @@ subsequent maintainer ceremony. Partial configuration fails closed.
 - [ ] Confirm required CI on `main` is green
 - [ ] Confirm the reviewed public pin and decernor-generated anchor pair are
       committed; Dave generates them with `make release-insert-anchors` using
-      `DECERNOR_BIN` (absolute executable) or `decernor` on `PATH`, version
-      0.1.7 or newer. No sibling repository path is inferred
+      `STORAGEPRIMS_DECERNOR_BIN` set to an absolute executable Decernor
+      v0.1.8 or newer. The ceremony never falls back to `DECERNOR_BIN` or PATH;
+      generation verifies the installed pair against both public exports
 - [ ] From a clean, freshly fetched `main`, run `make release-preflight`
 
 The preflight requires a clean tree, the full `make pr-final` gate, exact
@@ -102,6 +103,10 @@ make release
 ```
 
 `make release` performs the only serialized walk:
+
+Keep `STORAGEPRIMS_DECERNOR_BIN` bound to the reviewed absolute v0.1.8+
+executable throughout the ceremony; `release-verify-keys` re-derives both
+exported publics against the anchors staged into the signed set.
 
 1. Safely empty the repository-owned `dist/release`
 2. Download and structurally validate the exact unsigned draft assets

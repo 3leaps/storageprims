@@ -3,6 +3,7 @@
 set -euo pipefail
 staging="${1:?staging directory required}"
 dest="${2:?destination required}"
+shift 2
 for name in expected-fingerprints.txt expected-fingerprints.ndjson; do
 	[[ -s "$staging/$name" && ! -L "$staging/$name" ]] || {
 		echo 'error: incomplete anchor pair' >&2
@@ -35,5 +36,8 @@ if [[ "${STORAGEPRIMS_TEST_FAIL_ANCHOR_INSTALL:-}" == 1 ]]; then
 	exit 1
 fi
 mv -f "$dest/expected-fingerprints.txt.new" "$dest/expected-fingerprints.txt"
+if [[ "$#" -gt 0 ]]; then
+	"$@"
+fi
 trap - EXIT INT TERM HUP
 rm -rf "$backup"

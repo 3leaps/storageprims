@@ -2,38 +2,21 @@
 # Maintainer-only: derive two public anchors from approved public exports.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
+# shellcheck source=scripts/release-decernor.sh
+source "$root/scripts/release-decernor.sh"
 cd "$root"
+resolve_release_decernor ceremony
 : "${STORAGEPRIMS_MINISIGN_PUB:?public minisign export required}"
-[[ -s docs/security/release-signing-keys.asc && -s "$STORAGEPRIMS_MINISIGN_PUB" ]] || {
+[[ -s docs/security/release-signing-keys.asc && ! -L docs/security/release-signing-keys.asc &&
+	-s "$STORAGEPRIMS_MINISIGN_PUB" && ! -L "$STORAGEPRIMS_MINISIGN_PUB" ]] || {
 	echo 'error: both public exports required' >&2
 	exit 1
 }
-if [[ -n "${DECERNOR_BIN:-}" ]]; then
-	[[ "$DECERNOR_BIN" == /* && -x "$DECERNOR_BIN" ]] || {
-		echo 'error: DECERNOR_BIN must be absolute and executable' >&2
-		exit 1
-	}
-else
-	DECERNOR_BIN="$(command -v decernor)" || {
-		echo 'error: decernor required on PATH' >&2
-		exit 1
-	}
-fi
-version="$("$DECERNOR_BIN" version -e | sed -n 's/^Version:[[:space:]]*//p' | head -1)"
-python3 - "$version" <<'PY'
-import sys
-try:
-    version = tuple(int(x) for x in sys.argv[1].split('.'))
-except ValueError:
-    raise SystemExit('error: invalid decernor version')
-if len(version) != 3 or version < (0, 1, 7):
-    raise SystemExit('error: decernor >= 0.1.7 required')
-PY
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
-"$DECERNOR_BIN" fingerprint docs/security/release-signing-keys.asc --class public --kind gpg \
+"$RELEASE_DECERNOR_BIN" fingerprint docs/security/release-signing-keys.asc --class public --kind gpg \
 	--format ndjson --path-mode none --gpg-role primary >"$scratch/gpg.ndjson"
-"$DECERNOR_BIN" fingerprint "$STORAGEPRIMS_MINISIGN_PUB" --class public --kind minisign \
+"$RELEASE_DECERNOR_BIN" fingerprint "$STORAGEPRIMS_MINISIGN_PUB" --class public --kind minisign \
 	--format ndjson --path-mode none >"$scratch/minisign.ndjson"
 python3 - "$scratch" <<'PY'
 import json
@@ -50,14 +33,18 @@ if len(g) != 1 or len(m) != 1 or g[0].get('fingerprint_scheme') != 'openpgp-fing
 (base / 'minisign.json').write_text(json.dumps(m[0]) + '\n')
 PY
 for kind in gpg minisign; do
-	"$DECERNOR_BIN" validate --schema "$root/schemas/fingerprint-record.v0.schema.json" \
+	"$RELEASE_DECERNOR_BIN" validate --schema "$root/schemas/fingerprint-record.v0.schema.json" \
 		--data "$scratch/$kind.json" >/dev/null
 done
-"$DECERNOR_BIN" fingerprint docs/security/release-signing-keys.asc --class public --kind gpg \
+"$RELEASE_DECERNOR_BIN" fingerprint docs/security/release-signing-keys.asc --class public --kind gpg \
 	--format ndjson --path-mode none --gpg-role primary >"$scratch/gpg.verify.ndjson"
-"$DECERNOR_BIN" fingerprint "$STORAGEPRIMS_MINISIGN_PUB" --class public --kind minisign \
+"$RELEASE_DECERNOR_BIN" fingerprint "$STORAGEPRIMS_MINISIGN_PUB" --class public --kind minisign \
 	--format ndjson --path-mode none >"$scratch/minisign.verify.ndjson"
 cmp "$scratch/gpg.ndjson" "$scratch/gpg.verify.ndjson"
 cmp "$scratch/minisign.ndjson" "$scratch/minisign.verify.ndjson"
-"$root/scripts/install-release-anchors.sh" "$scratch" "$root/keys"
+"$root/scripts/install-release-anchors.sh" "$scratch" "$root/keys" \
+	"$RELEASE_DECERNOR_BIN" fingerprint verify \
+	--anchors "$root/keys/expected-fingerprints.txt" \
+	--anchors-ndjson "$root/keys/expected-fingerprints.ndjson" \
+	--gpg "$root/docs/security/release-signing-keys.asc" --minisign "$STORAGEPRIMS_MINISIGN_PUB" >/dev/null
 echo '[ok] generated public fingerprint anchors for review'
