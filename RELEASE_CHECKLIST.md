@@ -85,6 +85,16 @@ GPG home:
 ```bash
 export STORAGEPRIMS_RELEASE_TAG=v0.1.2 # example: first signed cut; set each cut explicitly
 # Load the approved external environment for this repository before continuing.
+```
+
+If the reviewed public pin already exists, skip the export block and run the
+public validation block below. Never regenerate an approved pin to satisfy the
+procedure. If the pin is absent, run the export block first and stop on any
+failure before running validation.
+
+**Export only when the pin is absent (maintainer only):**
+
+```bash
 (
   set -euo pipefail # a failed guard stops this entire block, even in an interactive shell
   : "${STORAGEPRIMS_RELEASE_TAG:?set the approved tag for this cut}"
@@ -111,6 +121,27 @@ PY
   set -C # never overwrite a public pin
   gpg --homedir "$STORAGEPRIMS_GPG_HOMEDIR" --batch --armor \
     --export "$STORAGEPRIMS_PGP_KEY_ID" > "$pin"
+)
+```
+
+**Validate an existing or newly exported public pin (maintainer only):**
+
+```bash
+(
+  set -euo pipefail # a failed guard stops this entire block, even in an interactive shell
+  : "${STORAGEPRIMS_RELEASE_TAG:?set the approved tag for this cut}"
+  : "${STORAGEPRIMS_TAG_MESSAGE_DIR:?load the per-cut message directory}"
+  : "${STORAGEPRIMS_PGP_KEY_ID:?load the exact signing-subkey selector}"
+  : "${STORAGEPRIMS_GPG_SIGNING_FINGERPRINT:?load the approved primary fingerprint}"
+  : "${STORAGEPRIMS_DECERNOR_BIN:?load the trusted Decernor executable}"
+  : "${STORAGEPRIMS_MINISIGN_PUB:?load the approved minisign public export}"
+  [[ "$STORAGEPRIMS_DECERNOR_BIN" == /* && -f "$STORAGEPRIMS_DECERNOR_BIN" &&
+     ! -L "$STORAGEPRIMS_DECERNOR_BIN" && -x "$STORAGEPRIMS_DECERNOR_BIN" ]]
+  [[ "$STORAGEPRIMS_PGP_KEY_ID" == *'!' ]]
+  [[ "${STORAGEPRIMS_TAG_MESSAGE_DIR%/}" == */"$STORAGEPRIMS_RELEASE_TAG" ]]
+  bash -c 'source scripts/release-decernor.sh; resolve_release_decernor ceremony'
+  pin=docs/security/release-signing-keys.asc
+  [[ -f "$pin" && -s "$pin" && ! -L "$pin" ]]
   require_public_only() {
     if "$STORAGEPRIMS_DECERNOR_BIN" fingerprint "$1" --kind "$2" \
       --class private --fail-on-empty --path-mode none >/dev/null; then
@@ -146,16 +177,20 @@ if by_role != {'primary': primary, 'subkey': selector[:-1]}:
 PY
   gpg --homedir "$verify_tmp" --batch --show-keys \
     --fingerprint --with-subkey-fingerprint "$pin" # inspect readable expiry/revocation
+  "$STORAGEPRIMS_DECERNOR_BIN" scan docs/security --fail-on unsafe
 )
 ```
 
 The `!` selects one signing subkey; the export includes its primary public key.
 Decernor must find **no private record**. With `--fail-on-empty`, exit 3 is the
 expected no-match result; exit 0 means private material was found and every
-other result is a stop. The block asserts exactly one primary matching the
-approved fingerprint and one subkey matching the `!` selector. Before
-proceeding, inspect the human-readable GPG output for unexpired, non-revoked
-primary and signing subkey; it uses a throwaway home, not the ceremony keyring.
+other result is a stop. The validation block asserts exactly one primary matching the
+approved fingerprint and one subkey matching the `!` selector. The validation
+block reads the existing public pin without using the ceremony GPG home or
+overwriting the pin. Dave runs this validation block on the existing reviewed
+export. Before proceeding, inspect the human-readable GPG output for an
+unexpired, non-revoked primary and signing subkey; the display uses a throwaway
+home, not the ceremony keyring.
 Only after those checks pass, run:
 
 ```bash
@@ -179,9 +214,11 @@ should appear in the working-tree diff; reviewers re-derive the fingerprints
 from the public exports before approving the PR. Stop on any unexpected file,
 private marker, missing or extra key, expiry/revocation, mismatch, invalid
 Decernor version, or nonzero generation/verification result. Fix the cause and
-regenerate; never hand-edit an anchor. If a post-export check fails, Dave must
-confirm that the new untracked public pin is his intended export, remove that
-failed export, then rerun from the beginning. Never overwrite an existing pin.
+regenerate anchors; never hand-edit an anchor. If validation of an existing
+approved pin fails, stop and investigate without modifying it. If a newly
+exported pin fails a post-export check, Dave must confirm that the new untracked
+pin is his intended export, remove that failed export, then rerun from the
+beginning. Never overwrite an existing pin.
 
 ## 2. Create the signed tag and unsigned draft
 
