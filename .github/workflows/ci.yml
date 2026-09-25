@@ -189,6 +189,15 @@ jobs:
           command -v jq
           command -v cargo
           command -v rg
+      - name: Install checksum-pinned Decernor for release tests
+        run: |
+          tool_dir="$(mktemp -d "$RUNNER_TEMP/decernor.XXXXXX")"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            'https://github.com/3leaps/decernor/releases/download/v0.1.8/decernor_0.1.8_linux_amd64.tar.gz' \
+            --output "$tool_dir/decernor_0.1.8_linux_amd64.tar.gz"
+          (cd "$tool_dir" && sha256sum --check "$GITHUB_WORKSPACE/config/release/decernor-ci-sha256.txt")
+          tar -xzf "$tool_dir/decernor_0.1.8_linux_amd64.tar.gz" -C "$tool_dir" decernor
+          echo "STORAGEPRIMS_DECERNOR_BIN=$tool_dir/decernor" >> "$GITHUB_ENV"
       - name: Package workspace
         run: make release-check
       - name: Release tooling tests

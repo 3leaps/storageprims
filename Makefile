@@ -23,6 +23,7 @@
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
 .PHONY: release-crates-list release-crates-dry-run release-crates-verify
+.PHONY: release-tag release-push-tag release-verify-tag release-verify-remote-tag release-insert-anchors
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -547,6 +548,9 @@ release-crates-verify: ## Wait for the final registry version and verify each pu
 	@CRATE="$(CRATE)" ./scripts/release-crates-verify.sh
 
 release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
+	@./scripts/release-decernor.test.sh
+	@./scripts/release-tag-controls.test.sh
+	@./scripts/verify-pinned-tag.test.sh
 	@./scripts/release-crates.test.sh
 	@./scripts/release-crates-verify.test.sh
 	@./scripts/release-guard-tag-version.test.sh
@@ -557,6 +561,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@echo "[ok] Release tooling tests passed"
 
 release-preflight: ## Verify clean-tree pre-tag requirements
+	@./scripts/validate-release-anchors.sh
 	@echo "Running release preflight checks..."
 	@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
 		echo "[!!] Working tree not clean - commit or stash changes first"; \
@@ -582,6 +587,21 @@ release-preflight: ## Verify clean-tree pre-tag requirements
 release-guard-tag-version: ## Validate the canonical release tag
 	@./scripts/release-guard-tag-version.sh
 
+release-tag: ## Create and verify a local signed version tag
+	@./scripts/release-tag.sh
+
+release-push-tag: ## Publish and verify the signed version tag
+	@./scripts/release-push-tag.sh
+
+release-verify-tag: ## Verify the tag using only the committed public pin
+	@./scripts/release-verify-tag.sh
+
+release-verify-remote-tag: ## Compare local and remote tag objects and GitHub verification
+	@./scripts/release-verify-remote-tag.sh
+
+release-insert-anchors: ## Maintainer-only: generate and review public fingerprint anchors
+	@./scripts/release-insert-anchors.sh
+
 release-clean: ## Safely empty the repository release staging directory
 	@./scripts/release-clean.sh "$(RELEASE_DIR)"
 
@@ -595,6 +615,7 @@ release-notes: ## Add the exact per-cut notes to the signable asset set
 	@./scripts/validate-release-assets.sh "$(RELEASE_DIR)" base >/dev/null
 	@cp "docs/releases/$${STORAGEPRIMS_RELEASE_TAG}.md" \
 		"$(RELEASE_DIR)/release-notes-$${STORAGEPRIMS_RELEASE_TAG}.md"
+	@./scripts/stage-release-anchors.sh "$(RELEASE_DIR)"
 	@./scripts/validate-release-assets.sh "$(RELEASE_DIR)" signable >/dev/null
 	@echo "[ok] Per-cut release notes added to the signed set"
 
@@ -613,7 +634,7 @@ release-verify-checksums: ## Verify exact dual checksum manifests
 release-verify-signatures: ## Verify every configured signature
 	@./scripts/verify-signatures.sh "$(RELEASE_DIR)"
 
-release-verify-keys: ## Verify exported material contains public keys only
+release-verify-keys: ## Verify exported public keys against staged anchors
 	@./scripts/verify-public-keys.sh "$(RELEASE_DIR)"
 
 release-verify: release-verify-checksums release-verify-signatures release-verify-keys ## Verify signed release set

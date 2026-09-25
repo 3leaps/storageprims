@@ -44,6 +44,33 @@ jobs:
           printf 'version=%s\n' "$(cat VERSION)" >>"$GITHUB_OUTPUT"
       - name: Verify package archives without publishing
         run: make release-check
+  verify-signature:
+    name: Verify pinned tag signature and publication policy
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact signed tag and committed pin
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify committed pin and GitHub signature
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ./scripts/verify-pinned-tag.sh
+          EXPECTED_OBJECT="$(git rev-parse "refs/tags/$STORAGEPRIMS_RELEASE_TAG")"
+          tag_json="$(gh api "repos/3leaps/storageprims/git/tags/$EXPECTED_OBJECT")"
+          jq -e --arg tag "$STORAGEPRIMS_RELEASE_TAG" --arg commit "$(git rev-parse HEAD)" \
+            '.tag == $tag and .object.type == "commit" and .object.sha == $commit and
+             .verification.verified == true and .verification.reason == "valid"' \
+            <<<"$tag_json" >/dev/null
+          ./scripts/release-guard-tag-ruleset.sh --read-only --verify-tag-attestation "$EXPECTED_OBJECT"
   build-ffi:
     name: FFI (${{ matrix.platform }})
     needs: validate
@@ -142,7 +169,7 @@ jobs:
           retention-days: 7
   draft:
     name: Create exact unsigned draft
-    needs: [validate, build-ffi, sbom]
+    needs: [validate, verify-signature, build-ffi, sbom]
     runs-on: ubuntu-latest
     permissions:
       contents: write

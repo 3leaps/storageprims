@@ -100,6 +100,8 @@ expect_fail "$SCRIPT_DIR/validate-release-assets.sh" "$fixture" base
 
 make_archive linux-amd64 libstorageprims_ffi.so libstorageprims_ffi.a
 printf 'notes\n' >"$fixture/release-notes-${STORAGEPRIMS_RELEASE_TAG}.md"
+printf 'gpg fixture\nminisign fixture\n' >"$fixture/expected-fingerprints.txt"
+printf '{"fixture":true}\n' >"$fixture/expected-fingerprints.ndjson"
 # shellcheck source=release-common.sh
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/release-common.sh"

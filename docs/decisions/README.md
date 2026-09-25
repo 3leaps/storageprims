@@ -8,6 +8,7 @@ records for storageprims.
 | ID       | Type     | Title                                                                                                                                        | Status              | Date       |
 | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ---------- |
 | PDR-0001 | Process  | [Publish Library Crates After the Release Tag](PDR-0001-crates-io-after-tag.md)                                                              | Accepted            | 2026-09-23 |
+| PDR-0002 | Process  | [Release Publication Gate](PDR-0002-release-publication-gate.md)                                                                             | Accepted            | 2026-09-23 |
 | PDR-0003 | Process  | [Public Source and Test-Data Review](PDR-0003-public-source-review.md)                                                                       | Accepted            | 2026-09-25 |
 | ADR-0001 | Arch     | [Canonical Core Contract and Provider-Neutral Surface](ADR-0001-canonical-core-contract-and-provider-neutral-surface.md)                     | Approved            | 2026-03-16 |
 | ADR-0002 | Arch     | [Crate Structure and Library-First Adapter Boundaries](ADR-0002-crate-structure-and-library-first-adapter-boundaries.md)                     | Approved            | 2026-03-16 |
