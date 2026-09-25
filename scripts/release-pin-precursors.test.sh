@@ -45,12 +45,22 @@ pin="$fixture/repo/docs/security/release-signing-keys.asc"
 fail 'public GPG pin' run release-validate-pin
 fail 'minisign public export' env STORAGEPRIMS_MINISIGN_PUB="$fixture/missing.pub" make --no-print-directory -s -C "$fixture/repo" release-export-pin
 [[ ! -e "$pin" ]]
-zsh -c 'make --no-print-directory -s -C "$1" release-export-pin' zsh "$fixture/repo" >"$fixture/output"
+bash -c 'make --no-print-directory -s -C "$1" release-export-pin' bash "$fixture/repo" >"$fixture/output"
 [[ -s "$pin" ]]
 cp "$pin" "$fixture/pin-copy"
 before="$(stat -f '%m:%c' "$pin" 2>/dev/null || stat -c '%Y:%Z' "$pin")"
 env -u STORAGEPRIMS_GPG_HOMEDIR make --no-print-directory -s -C "$fixture/repo" release-validate-pin >"$fixture/output"
-zsh -c 'make --no-print-directory -s -C "$1" release-validate-pin' zsh "$fixture/repo" >"$fixture/output"
+bash -c 'make --no-print-directory -s -C "$1" release-validate-pin' bash "$fixture/repo" >"$fixture/output"
+if command -v zsh >/dev/null 2>&1; then
+	zsh -c 'make --no-print-directory -s -C "$1" release-validate-pin' zsh "$fixture/repo" >"$fixture/output"
+	# shellcheck disable=SC2016 # The nested zsh expands $1.
+	fail 'public pin already exists' zsh -c 'make --no-print-directory -s -C "$1" release-export-pin' zsh "$fixture/repo"
+elif [[ "$(uname -s)" == Darwin ]]; then
+	echo 'error: zsh required for macOS release precursor test' >&2
+	exit 1
+else
+	echo '[skip] zsh unavailable; bash-to-make coverage passed'
+fi
 cmp "$pin" "$fixture/pin-copy"
 after="$(stat -f '%m:%c' "$pin" 2>/dev/null || stat -c '%Y:%Z' "$pin")"
 [[ "$before" == "$after" ]] || {
