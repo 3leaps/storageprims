@@ -32,9 +32,7 @@ fail_if_found \
 	'WAITPRIMS_|SYSPRIMS_' \
 	--glob '!release-negative-controls.test.sh' \
 	Makefile scripts .github/workflows/release.yml
-fail_if_found \
-	'STGP-|brief-stgp|release-storageprims-v010|org-3leaps' \
-	README.md CHANGELOG.md RELEASE_NOTES.md RELEASE_CHECKLIST.md docs/releases
+"$root/scripts/check-public-source.sh"
 
 mutation_count="$(rg -U -o \
 	'gh release (upload|edit)[^\n]*(\n[^\n]*){0,2}--repo "\$STORAGEPRIMS_REPOSITORY"' \
@@ -51,6 +49,7 @@ if rg -n --glob '!release-negative-controls.test.sh' \
 fi
 
 if [[ "$#" == 0 ]]; then
+	"$root/scripts/public-source-controls.test.sh"
 	fixture="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-workflow-control.XXXXXX")"
 	trap 'rm -rf "$fixture"' EXIT
 	for forbidden in 'cargo publish' 'cargo login' 'cargo yank' 'cargo owner' \

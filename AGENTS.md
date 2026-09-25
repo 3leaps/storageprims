@@ -128,6 +128,16 @@ are implemented.
 - Keep changes minimal and focused
 - Consider FFI boundary impacts
 
+### Public Source and Test Data
+
+Follow the [3 Leaps OSS Sensitive Local Data Policy](https://github.com/3leaps/oss-policies/blob/main/SENSITIVE-LOCAL-DATA.md)
+and [PDR-0003](docs/decisions/PDR-0003-public-source-review.md). Tests,
+fixtures, examples, comments, deny lists, and diagnostics use independently
+invented synthetic values, never private paths, internal references, or
+identifying data. Keep proprietary material outside the working tree, not
+merely ignored. Review branch names, commits, PR text, and logs as public
+surfaces in addition to the tracked-source check.
+
 ### Before Committing
 
 - Run `cargo fmt && cargo clippy` (or `make check`)

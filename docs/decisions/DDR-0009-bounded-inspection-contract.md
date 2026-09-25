@@ -6,7 +6,7 @@
 ## Decision
 
 The Rust operations crate provides a guarded `preview_bytes` helper for a
-selected first-N byte prefix. It observes once, binds the returned STGP-006
+selected first-N byte prefix. It observes once, binds the returned
 native-version selector when available (otherwise its validator selector), and
 uses a guarded range request. It never falls back to an unguarded current-object
 read. `preview_bytes_selected` accepts an already-bound selection and does not
