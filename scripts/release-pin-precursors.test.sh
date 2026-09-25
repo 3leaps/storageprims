@@ -29,6 +29,13 @@ export STORAGEPRIMS_GPG_SIGNING_FINGERPRINT="$primary" STORAGEPRIMS_PGP_KEY_ID="
 unset STORAGEPRIMS_RELEASE_TAG STORAGEPRIMS_TAG_MESSAGE_DIR || true
 
 run() { make --no-print-directory -s -C "$fixture/repo" "$@"; }
+pin_times() {
+	if [[ "$(uname -s)" == Darwin ]]; then
+		stat -f '%m:%c' "$1"
+	else
+		stat -c '%Y:%Z' "$1"
+	fi
+}
 fail() {
 	local reason="$1"
 	shift
@@ -47,8 +54,10 @@ fail 'minisign public export' env STORAGEPRIMS_MINISIGN_PUB="$fixture/missing.pu
 [[ ! -e "$pin" ]]
 bash -c 'make --no-print-directory -s -C "$1" release-export-pin' bash "$fixture/repo" >"$fixture/output"
 [[ -s "$pin" ]]
+# Distinct old mtime catches a same-second touch despite stat's second resolution.
+touch -t 202001010000 "$pin"
 cp "$pin" "$fixture/pin-copy"
-before="$(stat -f '%m:%c' "$pin" 2>/dev/null || stat -c '%Y:%Z' "$pin")"
+before="$(pin_times "$pin")"
 env -u STORAGEPRIMS_GPG_HOMEDIR make --no-print-directory -s -C "$fixture/repo" release-validate-pin >"$fixture/output"
 bash -c 'make --no-print-directory -s -C "$1" release-validate-pin' bash "$fixture/repo" >"$fixture/output"
 if command -v zsh >/dev/null 2>&1; then
@@ -62,7 +71,7 @@ else
 	echo '[skip] zsh unavailable; bash-to-make coverage passed'
 fi
 cmp "$pin" "$fixture/pin-copy"
-after="$(stat -f '%m:%c' "$pin" 2>/dev/null || stat -c '%Y:%Z' "$pin")"
+after="$(pin_times "$pin")"
 [[ "$before" == "$after" ]] || {
 	echo 'error: existing public pin timestamp changed' >&2
 	exit 1
