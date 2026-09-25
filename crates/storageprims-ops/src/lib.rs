@@ -247,7 +247,7 @@ impl InspectionLedger {
     }
 }
 
-/// Read a selected prefix through the STGP-006 guarded range contract.
+/// Read a selected prefix through the source-guarded range contract.
 ///
 /// The returned receipt describes only the prefix. It does not claim a complete
 /// object download when the requested prefix is fulfilled before EOF.

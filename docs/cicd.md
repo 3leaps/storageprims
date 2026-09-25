@@ -11,6 +11,11 @@
 The target is intentionally built from existing repo checks so contributors do not
 have to remember an ad hoc command list.
 
+Tests and fixtures use independently invented synthetic values. Do not place
+private paths, internal references, or identifying data in test inputs, expected
+output, diagnostics, or deny lists. See [PDR-0003](decisions/PDR-0003-public-source-review.md)
+and the [3 Leaps OSS Sensitive Local Data Policy](https://github.com/3leaps/oss-policies/blob/main/SENSITIVE-LOCAL-DATA.md).
+
 ## `make pr-final`
 
 `make pr-final` currently runs:
