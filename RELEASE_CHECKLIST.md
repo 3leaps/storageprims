@@ -71,132 +71,43 @@ release-note extraction, a successful fetch, and exact equality between
 
 ### Initial public pin and anchors (maintainer only)
 
-Export the **existing approved key's public portion** into the repository for
-review; this does not generate a new key or change the key already registered
-on GitHub. GitHub's Verified badge is a secondary check, while the committed
-pin authorizes the signing key used by CI. Run the commands from the repository
-root on the separate public-pin/anchor branch in a fresh shell. Set the intended
-release tag by hand
-**before** loading the approved external environment so its per-cut message
-directory is derived from the intended tag.
-Confirm the external message directory ends in that tag. Do not use an ambient
-GPG home:
+The committed public pin authorizes the signing key used by CI; GitHub's
+Verified badge is a secondary check. On the separate public-pin/anchor branch,
+load the approved external environment in a fresh shell. From the repository
+root, run these Make targets from zsh or bash; their scripts select Bash 3.2 or
+newer via their shebangs. They do not need the release tag or message directory.
+An empty per-cut message directory does not block public-pin validation or
+anchor generation;
+`message.txt` is required later for tag creation. Do not use an ambient GPG
+home for export.
+
+**If an approved public pin already exists**, validate that existing export:
 
 ```bash
-export STORAGEPRIMS_RELEASE_TAG=v0.1.2 # example: first signed cut; set each cut explicitly
-# Load the approved external environment for this repository before continuing.
+make release-validate-pin
 ```
 
-If the reviewed public pin already exists, skip the export block and run the
-public validation block below. Never regenerate an approved pin to satisfy the
-procedure. If the pin is absent, run the export block first and stop on any
-failure before running validation.
-
-**Export only when the pin is absent (maintainer only):**
+This target reads the existing public pin and approved minisign export; it does
+not require the ceremony GPG home and never exports or overwrites the pin.
+**Only if no pin exists**, Dave may explicitly export the existing approved
+key's public portion and validate it in one step (this does not create a key or
+change the one registered on GitHub):
 
 ```bash
-(
-  set -euo pipefail # a failed guard stops this entire block, even in an interactive shell
-  : "${STORAGEPRIMS_RELEASE_TAG:?set the approved tag for this cut}"
-  : "${STORAGEPRIMS_GPG_HOMEDIR:?load the approved GPG home}"
-  : "${STORAGEPRIMS_PGP_KEY_ID:?load the exact signing-subkey selector}"
-  : "${STORAGEPRIMS_GPG_SIGNING_FINGERPRINT:?load the approved primary fingerprint}"
-  : "${STORAGEPRIMS_DECERNOR_BIN:?load the trusted Decernor executable}"
-  : "${STORAGEPRIMS_TAG_MESSAGE_DIR:?load the per-cut message directory}"
-  : "${STORAGEPRIMS_MINISIGN_PUB:?load the approved minisign public export}"
-  [[ "$STORAGEPRIMS_GPG_HOMEDIR" == /* && -d "$STORAGEPRIMS_GPG_HOMEDIR" ]]
-  [[ "$STORAGEPRIMS_DECERNOR_BIN" == /* && -f "$STORAGEPRIMS_DECERNOR_BIN" &&
-     ! -L "$STORAGEPRIMS_DECERNOR_BIN" && -x "$STORAGEPRIMS_DECERNOR_BIN" ]]
-  python3 - "$STORAGEPRIMS_GPG_HOMEDIR" "$HOME/.gnupg" <<'PY'
-from pathlib import Path
-import sys
-if Path(sys.argv[1]).resolve() == Path(sys.argv[2]).resolve():
-    raise SystemExit('STOP: default GPG home is not approved for this ceremony')
-PY
-  [[ "$STORAGEPRIMS_PGP_KEY_ID" == *'!' ]]
-  [[ "${STORAGEPRIMS_TAG_MESSAGE_DIR%/}" == */"$STORAGEPRIMS_RELEASE_TAG" ]]
-  bash -c 'source scripts/release-decernor.sh; resolve_release_decernor ceremony'
-  pin=docs/security/release-signing-keys.asc
-  [[ ! -e "$pin" && ! -L "$pin" ]] || { echo 'STOP: public pin already exists' >&2; exit 1; }
-  set -C # never overwrite a public pin
-  gpg --homedir "$STORAGEPRIMS_GPG_HOMEDIR" --batch --armor \
-    --export "$STORAGEPRIMS_PGP_KEY_ID" > "$pin"
-)
+make release-export-pin
 ```
 
-**Validate an existing or newly exported public pin (maintainer only):**
-
-```bash
-(
-  set -euo pipefail # a failed guard stops this entire block, even in an interactive shell
-  : "${STORAGEPRIMS_RELEASE_TAG:?set the approved tag for this cut}"
-  : "${STORAGEPRIMS_TAG_MESSAGE_DIR:?load the per-cut message directory}"
-  : "${STORAGEPRIMS_PGP_KEY_ID:?load the exact signing-subkey selector}"
-  : "${STORAGEPRIMS_GPG_SIGNING_FINGERPRINT:?load the approved primary fingerprint}"
-  : "${STORAGEPRIMS_DECERNOR_BIN:?load the trusted Decernor executable}"
-  : "${STORAGEPRIMS_MINISIGN_PUB:?load the approved minisign public export}"
-  [[ "$STORAGEPRIMS_DECERNOR_BIN" == /* && -f "$STORAGEPRIMS_DECERNOR_BIN" &&
-     ! -L "$STORAGEPRIMS_DECERNOR_BIN" && -x "$STORAGEPRIMS_DECERNOR_BIN" ]]
-  [[ "$STORAGEPRIMS_PGP_KEY_ID" == *'!' ]]
-  [[ "${STORAGEPRIMS_TAG_MESSAGE_DIR%/}" == */"$STORAGEPRIMS_RELEASE_TAG" ]]
-  bash -c 'source scripts/release-decernor.sh; resolve_release_decernor ceremony'
-  pin=docs/security/release-signing-keys.asc
-  [[ -f "$pin" && -s "$pin" && ! -L "$pin" ]]
-  require_public_only() {
-    if "$STORAGEPRIMS_DECERNOR_BIN" fingerprint "$1" --kind "$2" \
-      --class private --fail-on-empty --path-mode none >/dev/null; then
-      echo 'STOP: private material in public export' >&2; exit 1
-    else
-      decernor_rc=$?
-      [[ "$decernor_rc" -eq 3 ]] || { echo 'STOP: private-material check failed' >&2; exit 1; }
-    fi
-  }
-  require_public_only "$pin" gpg
-  [[ -s "$STORAGEPRIMS_MINISIGN_PUB" && ! -L "$STORAGEPRIMS_MINISIGN_PUB" ]]
-  require_public_only "$STORAGEPRIMS_MINISIGN_PUB" minisign
-  grep -q '^untrusted comment:' "$STORAGEPRIMS_MINISIGN_PUB"
-  verify_tmp="$(mktemp -d)"
-  trap 'rm -rf "$verify_tmp"' EXIT
-  "$STORAGEPRIMS_DECERNOR_BIN" fingerprint "$pin" --kind gpg \
-    --class public --fail-on-empty --path-mode none >"$verify_tmp/gpg.ndjson"
-  python3 - "$verify_tmp/gpg.ndjson" "$STORAGEPRIMS_GPG_SIGNING_FINGERPRINT" \
-    "$STORAGEPRIMS_PGP_KEY_ID" <<'PY'
-import json
-import pathlib
-import re
-import sys
-records = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
-primary, selector = sys.argv[2:]
-if not re.fullmatch('[0-9A-F]{40}', primary) or not re.fullmatch('[0-9A-F]{40}!', selector):
-    raise SystemExit('STOP: invalid configured fingerprints')
-if len(records) != 2 or any(r.get('kind') != 'gpg' or r.get('class') != 'public' for r in records):
-    raise SystemExit('STOP: expected exactly one public primary and signing subkey')
-by_role = {r.get('key_role'): r.get('fingerprint') for r in records}
-if by_role != {'primary': primary, 'subkey': selector[:-1]}:
-    raise SystemExit('STOP: exported public key differs from approved selector')
-PY
-  gpg --homedir "$verify_tmp" --batch --show-keys \
-    --fingerprint --with-subkey-fingerprint "$pin" # inspect readable expiry/revocation
-  "$STORAGEPRIMS_DECERNOR_BIN" scan docs/security --fail-on unsafe
-)
-```
-
-The `!` selects one signing subkey; the export includes its primary public key.
-Decernor must find **no private record**. With `--fail-on-empty`, exit 3 is the
-expected no-match result; exit 0 means private material was found and every
-other result is a stop. The validation block asserts exactly one primary matching the
-approved fingerprint and one subkey matching the `!` selector. The validation
-block reads the existing public pin without using the ceremony GPG home or
-overwriting the pin. Dave runs this validation block on the existing reviewed
-export. Before proceeding, inspect the human-readable GPG output for an
-unexpired, non-revoked primary and signing subkey; the display uses a throwaway
-home, not the ceremony keyring.
-Only after those checks pass, run:
+Export refuses an existing pin and uses no-clobber output. Never regenerate an
+approved pin to satisfy the procedure. Decernor must find **no private record**
+in either public export (`--fail-on-empty` exit 3); validation asserts exactly
+one approved primary and the selected signing subkey (`!`). Inspect its
+human-readable GPG output for an unexpired, non-revoked primary and subkey;
+the display uses a throwaway home. Only after validation succeeds, run:
 
 ```bash
 (
   set -euo pipefail # stop before later checks if generation or verification fails
-  make release-insert-anchors
+  make release-insert-anchors # revalidates the existing pin before generation
   ./scripts/validate-release-anchors.sh
   make release-tooling-test
   make pr-final
@@ -222,7 +133,10 @@ beginning. Never overwrite an existing pin.
 
 ## 2. Create the signed tag and unsigned draft
 
-Only after an explicit tag cue, from clean `main` at the preflighted commit:
+Only after an explicit tag cue, from clean `main` at the preflighted commit,
+set the intended `STORAGEPRIMS_RELEASE_TAG` before loading the approved external
+environment so it selects the matching per-cut message directory. Confirm the
+directory ends in that tag and contains `message.txt`:
 
 ```bash
 : "${STORAGEPRIMS_RELEASE_TAG:?load the approved cut}"
