@@ -24,7 +24,7 @@ checked to retain the registry version and omit the local dependency path.
 
 All jobs use the workspace MSRV, Rust 1.94.1. The Linux quality job uses the
 digest-pinned Fulmen Toolbox goneat glibc runner with writable GitHub homes;
-the job asserts Rust 1.94.1 and Goneat v0.6.0 before running checks. Windows
+the job asserts Rust 1.94.1 and Goneat v0.6.1 before running checks. Windows
 commands use Bash. There are no cross-compiled, musl, or macOS Intel cells.
 Local `make bootstrap` installs Goneat v0.6.1 when absent; an existing
 executable on PATH is not replaced by default. Run
