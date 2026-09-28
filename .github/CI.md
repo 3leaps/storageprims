@@ -26,6 +26,9 @@ All jobs use the workspace MSRV, Rust 1.94.1. The Linux quality job uses the
 digest-pinned Fulmen Toolbox goneat glibc runner with writable GitHub homes;
 the job asserts Rust 1.94.1 and Goneat v0.6.0 before running checks. Windows
 commands use Bash. There are no cross-compiled, musl, or macOS Intel cells.
+Local `make bootstrap` installs Goneat v0.6.1 when absent; an existing
+executable on PATH is not replaced by default. Run
+`make bootstrap-foundation FORCE=1` to upgrade an existing installation.
 
 `.github/actionlint.yaml` declares the organization GitHub-hosted arm64 runner
 labels for linting; it does not deploy runners.

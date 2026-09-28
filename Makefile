@@ -39,7 +39,7 @@ BIN_DIR := $(CURDIR)/bin
 
 # Pinned tool versions for reproducibility
 SFETCH_VERSION := v0.4.11
-GONEAT_VERSION ?= v0.6.0
+GONEAT_VERSION ?= v0.6.1
 GONEAT_FORMAT_FAIL_ON ?= medium
 NEXTEST_VERSION ?= 0.9.128
 CARGO_EDIT_VERSION ?= 0.13.10
