@@ -6,6 +6,26 @@
 
 ---
 
+## v0.1.2 — 2026-09-28
+
+### Highlights
+
+- The Rust workspace has guarded crates.io packaging and publication tooling,
+  including dependency order and registry verification.
+- The release workflow verifies signed tags and includes a committed public
+  OpenPGP key pin with OpenPGP and minisign fingerprint anchors.
+- Public-source reference checks run in the release tooling, and the S3 client
+  enables only its selected features. The public storage contracts are unchanged.
+
+### Upgrade notes
+
+- The workspace version is `0.1.2`. Publication and the signed `v0.1.2` tag
+  are separate maintainer release steps.
+- Git consumers can pin `v0.1.2` after the signed tag is published and verified.
+
+Full notes: [docs/releases/v0.1.2.md](docs/releases/v0.1.2.md)
+---
+
 ## v0.1.1 — 2026-09-22
 
 ### Highlights
