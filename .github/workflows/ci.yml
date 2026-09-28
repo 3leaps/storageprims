@@ -17,7 +17,7 @@ jobs:
     name: fast
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/fulmenhq/goneat-tools-runner-glibc@sha256:afcffa00283c765928dfef40966c282f2ca190653cf4443f634cb8f67c1d51ab
+      image: ghcr.io/fulmenhq/goneat-tools-runner-glibc@sha256:fe525f286458a7491958f8f3b916ef1b9befb05fa2dae2e37b0c08eb84860bae
       options: --user 1001:1001
     env:
       HOME: /github/home
@@ -41,7 +41,7 @@ jobs:
           set -euo pipefail
           test "$(id -u):$(id -g)" = "1001:1001"
           rustc --version | grep '^rustc 1\.94\.1 '
-          goneat version | grep '^Module: v0\.6\.0$'
+          goneat version | grep '^Module: v0\.6\.1$'
           for tool in goneat yamlfmt yamllint actionlint cargo-deny; do
             command -v "${tool}"
           done
