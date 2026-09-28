@@ -58,11 +58,11 @@ subsequent maintainer ceremony. Partial configuration fails closed.
       tooling branch may be used to rehearse the steps below; perform the real
       public-pin/anchor change on a separate branch from updated `main` and
       review it in a separate PR before tagging
-- [ ] Confirm the reviewed public pin and decernor-generated anchor pair are
-      committed; Dave generates them with `make release-insert-anchors` using
+- [ ] Confirm the reviewed public pin and Decernor-generated anchor pair are
+      committed. Generate the anchors with `make release-insert-anchors` and
       `STORAGEPRIMS_DECERNOR_BIN` set to an absolute executable Decernor
-      v0.1.8 or newer. The ceremony never falls back to `DECERNOR_BIN` or PATH;
-      generation verifies the installed pair against both public exports
+      v0.1.8 or newer. The target never falls back to `DECERNOR_BIN` or PATH,
+      and generation verifies the installed pair against both public exports
 - [ ] From a clean, freshly fetched `main`, run `make release-preflight`
 
 The preflight requires a clean tree, the full `make pr-final` gate, exact
@@ -89,9 +89,9 @@ make release-validate-pin
 
 This target reads the existing public pin and approved minisign export; it does
 not require the ceremony GPG home and never exports or overwrites the pin.
-**Only if no pin exists**, Dave may explicitly export the existing approved
-key's public portion and validate it in one step (this does not create a key or
-change the one registered on GitHub):
+**Only if no pin exists**, explicitly export the existing approved key's public
+portion and validate it in one step. This does not create a key or change the
+one registered on GitHub:
 
 ```bash
 make release-export-pin
@@ -127,8 +127,8 @@ private marker, missing or extra key, expiry/revocation, mismatch, invalid
 Decernor version, or nonzero generation/verification result. Fix the cause and
 regenerate anchors; never hand-edit an anchor. If validation of an existing
 approved pin fails, stop and investigate without modifying it. If a newly
-exported pin fails a post-export check, Dave must confirm that the new untracked
-pin is his intended export, remove that failed export, then rerun from the
+exported pin fails a post-export check, stop. Confirm the new untracked pin is
+the intended export before removing that failed export; then rerun from the
 beginning. Never overwrite an existing pin.
 
 ## 2. Create the signed tag and unsigned draft
@@ -218,18 +218,19 @@ registry; it does not upload them. Optionally confirm that
 `cargo publish --dry-run -p storageprims-ffi` fails as unpublished (and do
 the same for a future `storageprims-cli`).
 
-Dave uses a crates.io token scoped to the publishable names and kept in an
-external secret store, never the repository or CI. For first uploads it needs
-`publish-new` and `publish-update`; subsequent updates need only
-`publish-update`. Use an expiry of 30–90 days; do not grant `yank` without a
-separate decision. Confirm any new name is unclaimed immediately before its
-first upload using `cargo info --registry crates-io <crate>`.
-Load the token only into the environment for the specific publish command;
-do not use `cargo login` (which persists plaintext in Cargo credentials).
+For registry publication, use a crates.io token scoped to the publishable
+names. Keep it in an external secret store, never in the repository or CI.
+First uploads require `publish-new` and `publish-update`; subsequent updates
+require only `publish-update`. Set an expiry of 30–90 days. Do not
+grant `yank` without a separate decision. Immediately before the first upload
+of each new name, confirm it is unclaimed with
+`cargo info --registry crates-io <crate>`. Load the token into the environment
+only for the specific publish command. Do not use `cargo login`, which persists
+plaintext in Cargo credentials.
 
-Only after an explicit publish cue, Dave runs the following **one crate at a
-time** in the order printed by `make release-crates-list`, setting `crate`
-to the next list entry before each pass:
+Only after an explicit publish cue, run the following **one crate at a time**
+in the order printed by `make release-crates-list`. Set `crate` to the next
+list entry before each pass:
 
 ```bash
 make release-crates-list
@@ -262,5 +263,5 @@ primary and signing-subkey expiration with:
 gpg --homedir "$STORAGEPRIMS_GPG_HOMEDIR" --list-keys --with-subkey-fingerprint --with-colons "$STORAGEPRIMS_GPG_SIGNING_FINGERPRINT"
 ```
 
-An expired key is a rotation nobody scheduled. Do not sign or publish until a
-reviewed replacement pin is on `main` and the tag ruleset is active.
+If a key is expired, stop. Do not sign or publish until a reviewed replacement
+pin is on `main` and the tag ruleset is active.
