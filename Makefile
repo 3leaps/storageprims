@@ -24,6 +24,7 @@
 .PHONY: release-verify-keys release-verify release-upload release
 .PHONY: release-crates-list release-crates-dry-run release-crates-verify
 .PHONY: release-tag release-push-tag release-verify-tag release-verify-remote-tag release-insert-anchors
+.PHONY: release-export-pin release-validate-pin
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -549,6 +550,7 @@ release-crates-verify: ## Wait for the final registry version and verify each pu
 
 release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-decernor.test.sh
+	@./scripts/release-pin-precursors.test.sh
 	@./scripts/release-tag-controls.test.sh
 	@./scripts/verify-pinned-tag.test.sh
 	@./scripts/release-crates.test.sh
@@ -599,7 +601,13 @@ release-verify-tag: ## Verify the tag using only the committed public pin
 release-verify-remote-tag: ## Compare local and remote tag objects and GitHub verification
 	@./scripts/release-verify-remote-tag.sh
 
-release-insert-anchors: ## Maintainer-only: generate and review public fingerprint anchors
+release-export-pin: ## Maintainer-only: export approved public key when no pin exists
+	@./scripts/release-export-pin.sh
+
+release-validate-pin: ## Maintainer-only: read-only validation of existing public pin
+	@./scripts/release-validate-pin.sh
+
+release-insert-anchors: release-validate-pin ## Maintainer-only: validate pin, then generate public anchors
 	@./scripts/release-insert-anchors.sh
 
 release-clean: ## Safely empty the repository release staging directory
