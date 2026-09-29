@@ -1,0 +1,246 @@
+# One-cut recovery from the existing signed v0.1.2 tag. No signing keys in CI.
+# Dispatch only from main after review; the signed tag and tagged tree are immutable.
+name: Release draft recovery
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing signed release tag
+        type: string
+        required: true
+        default: v0.1.2
+      tag_object:
+        description: Approved annotated tag object SHA-1
+        type: string
+        required: true
+        default: 326257266c6def26e49fd4336ad03c3f8fcac532
+      commit:
+        description: Approved tagged commit SHA-1
+        type: string
+        required: true
+        default: 1666a2ee3166f2b764514fef36794dfd514967d1
+permissions:
+  contents: read
+concurrency:
+  group: release-refs/tags/${{ inputs.tag }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  STORAGEPRIMS_RELEASE_TAG: ${{ inputs.tag }}
+  STORAGEPRIMS_EXPECTED_TAG_OBJECT: ${{ inputs.tag_object }}
+  STORAGEPRIMS_EXPECTED_COMMIT: ${{ inputs.commit }}
+jobs:
+  validate:
+    name: Validate signed tag and package set
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      version: ${{ steps.release.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify existing signed tag and tagged tree
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git show "$GITHUB_SHA:scripts/release-recovery-guard.sh" >"$RUNNER_TEMP/recovery-guard.sh"
+          bash "$RUNNER_TEMP/recovery-guard.sh" verify
+          ./scripts/check-release-notes.sh "$STORAGEPRIMS_RELEASE_TAG"
+          printf 'commit=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$(cat VERSION)" >>"$GITHUB_OUTPUT"
+      - name: Verify package archives without publishing
+        run: make release-check
+  verify-signature:
+    name: Recheck committed-pin and GitHub signature
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable tag again
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git show "$GITHUB_SHA:scripts/release-recovery-guard.sh" >"$RUNNER_TEMP/recovery-guard.sh"
+          bash "$RUNNER_TEMP/recovery-guard.sh" verify
+  build-ffi:
+    name: FFI (${{ matrix.platform }})
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-amd64
+            shared: libstorageprims_ffi.so
+            static: libstorageprims_ffi.a
+          - runner: ubuntu-latest-arm64-s
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64
+            shared: libstorageprims_ffi.so
+            static: libstorageprims_ffi.a
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+            shared: libstorageprims_ffi.dylib
+            static: libstorageprims_ffi.a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify tagged source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git show "$GITHUB_SHA:scripts/release-recovery-guard.sh" >"$RUNNER_TEMP/recovery-guard.sh"
+          bash "$RUNNER_TEMP/recovery-guard.sh" verify
+      - name: Install Rust 1.94.1
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
+        with:
+          toolchain: 1.94.1
+      - name: Verify native runner
+        run: |
+          set -euo pipefail
+          test "$(rustc -vV | awk '/^host:/{print $2}')" = "${{ matrix.target }}"
+      - name: Build native FFI
+        run: cargo build --package storageprims-ffi --release --locked
+      - name: Package exact FFI archive
+        run: |
+          set -euo pipefail
+          package_dir="dist/package"
+          archive="storageprims-ffi-${{ needs.validate.outputs.version }}-${{ matrix.platform }}.tar.gz"
+          mkdir -p "$package_dir"
+          cp "target/release/${{ matrix.static }}" "$package_dir/"
+          cp "target/release/${{ matrix.shared }}" "$package_dir/"
+          cp ffi/storageprims-ffi/storageprims.h "$package_dir/storageprims.h"
+          cp LICENSE-MIT LICENSE-APACHE "$package_dir/"
+          tar -czf "$archive" -C "$package_dir" \
+            LICENSE-APACHE LICENSE-MIT "${{ matrix.static }}" \
+            "${{ matrix.shared }}" storageprims.h
+          source scripts/release-common.sh
+          # shellcheck disable=SC2031
+          validate_ffi_archive "$archive"
+      - name: Upload FFI archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: ffi-${{ matrix.platform }}
+          path: storageprims-ffi-${{ needs.validate.outputs.version }}-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+  sbom:
+    name: CycloneDX SBOM
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify tagged source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git show "$GITHUB_SHA:scripts/release-recovery-guard.sh" >"$RUNNER_TEMP/recovery-guard.sh"
+          bash "$RUNNER_TEMP/recovery-guard.sh" verify
+      - name: Generate SBOM with pinned Syft image
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$PWD:/src" \
+            --workdir /src \
+            anchore/syft@sha256:f94e5d9fce1f2278491a8e3a63bd5f6ddb81fdfdbb8bf7a1637565c1d5344357 \
+            dir:. \
+            --output "cyclonedx-json=sbom-${{ needs.validate.outputs.version }}.cdx.json"
+          test -s "sbom-${{ needs.validate.outputs.version }}.cdx.json"
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sbom
+          path: sbom-${{ needs.validate.outputs.version }}.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+  draft:
+    name: Create exact unsigned draft only
+    needs: [validate, verify-signature, build-ffi, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recheck signed tag before assembling draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git show "$GITHUB_SHA:scripts/release-recovery-guard.sh" >"$RUNNER_TEMP/recovery-guard.sh"
+          bash "$RUNNER_TEMP/recovery-guard.sh" verify
+      - name: Download FFI archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: ffi-*
+          path: dist/release
+          merge-multiple: true
+      - name: Download SBOM
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: sbom
+          path: dist/release
+      - name: Assert exact unsigned inventory and absent release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp LICENSE-MIT LICENSE-APACHE dist/release/
+          ./scripts/validate-release-assets.sh dist/release base
+          bash "$RUNNER_TEMP/recovery-guard.sh" ref-only
+      - name: Create new unsigned draft and upload exact assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git show "$GITHUB_SHA:scripts/release-recovery-create-draft.sh" >"$RUNNER_TEMP/create-draft.sh"
+          bash "$RUNNER_TEMP/create-draft.sh"
+      - name: Verify exact draft state and remote inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/check-draft-release.sh after
