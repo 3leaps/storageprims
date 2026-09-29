@@ -44,6 +44,19 @@ tag_message_file() {
 		tag_die 'message directory must end in tag'
 		return 1
 	}
+	[[ "$STORAGEPRIMS_TAG_MESSAGE_DIR" == /* && "/$STORAGEPRIMS_TAG_MESSAGE_DIR/" != *'/../'* ]] || {
+		tag_die 'absolute message directory without parent traversal required'
+		return 1
+	}
+	local component="${STORAGEPRIMS_TAG_MESSAGE_DIR%/}"
+	while [[ "$component" != / ]]; do
+		[[ ! -L "$component" ]] || {
+			tag_die 'message directory may not contain symlink ancestors'
+			return 1
+		}
+		component="${component%/*}"
+		[[ -n "$component" ]] || component=/
+	done
 	local canonical
 	canonical="$(cd "$STORAGEPRIMS_TAG_MESSAGE_DIR" && pwd -P)"
 	case "$canonical" in "$tag_root" | "$tag_root"/*)
@@ -56,21 +69,7 @@ tag_message_file() {
 		tag_die 'message.txt required'
 		return 1
 	}
-	python3 - "$file" <<'PY' || {
-import pathlib
-import sys
-data = pathlib.Path(sys.argv[1]).read_bytes()
-try:
-    data.decode('utf-8')
-except UnicodeError:
-    raise SystemExit(1)
-if (b'\x00' in data or b'\r' in data or not data.endswith(b'\n')
-        or data.endswith(b'\n\n') or any(line.rstrip(b' \t') != line for line in data.splitlines())):
-    raise SystemExit(1)
-PY
-		tag_die 'message.txt must be UTF-8 with exactly one final newline'
-		return 1
-	}
+	"$tag_root/scripts/release-prepare-tag-message.py" --validate-message "$file" || return 1
 	printf '%s\n' "$file"
 }
 
@@ -146,8 +145,6 @@ tag_expected_message() {
 	local file
 	file="$(tag_message_file)" || return 1
 	cat "$file"
-	printf '\n'
-	"$tag_root/scripts/release-guard-tag-ruleset.sh" --print-attestation
 }
 
 tag_verify_object() {

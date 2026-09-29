@@ -23,7 +23,7 @@
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
 .PHONY: release-crates-list release-crates-dry-run release-crates-verify
-.PHONY: release-tag release-push-tag release-verify-tag release-verify-remote-tag release-insert-anchors
+.PHONY: release-prepare-tag-message release-tag release-push-tag release-verify-tag release-verify-remote-tag release-insert-anchors
 .PHONY: release-export-pin release-validate-pin
 
 # -----------------------------------------------------------------------------
@@ -553,6 +553,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-pin-precursors.test.sh
 	@./scripts/release-tag-controls.test.sh
 	@./scripts/release-tag-operator.test.sh
+	@./scripts/release-prepare-tag-message.test.sh
 	@./scripts/verify-pinned-tag.test.sh
 	@./scripts/release-crates.test.sh
 	@./scripts/release-crates-verify.test.sh
@@ -565,6 +566,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 
 release-preflight: ## Verify clean-tree pre-tag requirements
 	@./scripts/validate-release-anchors.sh
+	@./scripts/release-inspect-tag-ruleset.sh "v$(VERSION)"
 	@echo "Running release preflight checks..."
 	@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
 		echo "[!!] Working tree not clean - commit or stash changes first"; \
@@ -589,6 +591,9 @@ release-preflight: ## Verify clean-tree pre-tag requirements
 
 release-guard-tag-version: ## Validate the canonical release tag
 	@./scripts/release-guard-tag-version.sh
+
+release-prepare-tag-message: ## Prepare and review the external per-cut tag message
+	@./scripts/release-tag-operator.sh prepare-message
 
 release-tag: ## Create and verify a local signed version tag
 	@./scripts/release-tag-operator.sh local-tag

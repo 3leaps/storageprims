@@ -7,21 +7,24 @@ Status: Accepted
 Starting with the first signed version tag, the tag signature authorizes the
 exact commit and the release artifacts built from it. The signature is verified
 against the reviewed public key in `docs/security/release-signing-keys.asc`,
-using an isolated keyring. GitHub's independent Verified result and an active
-tag publication ruleset are additional requirements. The tag's signed message
-includes the digest of the expected ruleset; no draft release is created until
-all three checks pass. Earlier unsigned annotated releases remain historical.
+using an isolated keyring. GitHub's independent Verified result is also
+required before a draft is created. Tag-protection rules are inspected as a
+read-only advisory at preflight, local signing and remote push; their names,
+availability and mutable state are not signed or used as a draft gate. GitHub
+enforces any applicable rules on push. Earlier unsigned annotated releases
+remain historical.
 
-The maintainer authors `message.txt` outside the repository for each cut. The
-local signed tag must match that text, the policy attestation, the fixed infosec
+The maintainer reviews and approves the complete per-cut `message.txt`,
+prepared outside the repository by a no-clobber Make target or authored as
+custom public text. The local signed tag must match that text, the fixed infosec
 tagger and the exact commit on `origin/main`. Creating and pushing the tag are
 separate actions. CI has no signing credentials.
 Private signing material stays outside the working tree, as required by the
 [3 Leaps OSS Sensitive Local Data Policy](https://github.com/3leaps/oss-policies/blob/main/SENSITIVE-LOCAL-DATA.md).
 
 The public pin is loaded from the tagged commit itself. Review and merge of
-the pin through a PR _before_ the tag, combined with tag protection and the
-verified infosec signer, is the authorization boundary; an account-level
+the pin through a PR _before_ the tag, combined with the verified infosec
+signer, is the authorization boundary; an account-level
 GitHub Verified indicator alone is insufficient.
 
 The release checksum set includes `expected-fingerprints.txt` and
