@@ -25,7 +25,12 @@ Required ceremony variables:
   selected by the maintainer; self-reported identity does not authenticate
   the file, so bind it to a trusted tag-built regular file (not a symlink)
 - `STORAGEPRIMS_TAG_MESSAGE_DIR` — external per-cut directory ending in the
-  canonical tag; its only message input is `message.txt`
+  canonical tag; `make release-prepare-tag-message` creates the directory and
+  complete `message.txt` when absent. This is the approved public tag
+  annotation (for example, `storageprims v0.1.2` and one final newline), not
+  a fill-in template or release-notes copy. It must be nonempty UTF-8, regular
+  and non-symlink, with no CR/NUL, trailing whitespace
+  or extra final blank line. Do not include policy digests or signing material.
 - `STORAGEPRIMS_TAGGER_NAME` / `STORAGEPRIMS_TAGGER_EMAIL` — fixed infosec
   tagger identity (`3 Leaps Infosec Team <infosec@3leaps.net>`)
 - `STORAGEPRIMS_GPG_SIGNING_FINGERPRINT` — full 40-hex authorized primary
@@ -63,12 +68,33 @@ subsequent maintainer ceremony. Partial configuration fails closed.
       committed. Generate the anchors with `make release-insert-anchors` and
       `STORAGEPRIMS_DECERNOR_BIN` set to an absolute executable Decernor
       v0.1.8 or newer. The target never falls back to `DECERNOR_BIN` or PATH,
-      and generation verifies the installed pair against both public exports
+      and generation verifies the installed pair against both public exports.
+
+- [ ] Select the canonical tag and approved external per-cut message directory
+      in the environment (or use the approved optional external loader described
+      below). Prepare and review the public message:
+
+  ```console
+  $ STORAGEPRIMS_RELEASE_TAG=v0.1.2 make release-prepare-tag-message
+  ```
+
+  This target needs no signing keys, GitHub access, or MFA. It creates a
+  finished one-line public message when absent, or validates and previews an
+  existing maintainer-approved custom message without overwriting it. If the
+  directory is unsafe, the message is malformed or contains an unresolved
+  example placeholder, stop and correct the external input before proceeding.
+  It never signs or publishes. The maintainer reviews and approves the displayed
+  text before the local tag ceremony. Select the tag before loading an optional
+  per-cut environment script; neither route requires a new env-file convention.
+
 - [ ] From a clean, freshly fetched `main`, run `make release-preflight`
 
 The preflight requires a clean tree, the full `make pr-final` gate, exact
 release-note extraction, a successful fetch, and exact equality between
-`HEAD` and fetched `origin/main`.
+`HEAD` and fetched `origin/main`. It also reports visible applicable tag
+protection as FOUND, ABSENT or UNKNOWN. The report is advisory, not a tag
+authorization or a signed claim about mutable GitHub policy; inspect actual
+applicability and bypass behavior under the authorized account when relevant.
 
 ### Initial public pin and anchors (maintainer only)
 
@@ -134,16 +160,17 @@ beginning. Never overwrite an existing pin.
 
 ## 2. Create the signed tag and unsigned draft
 
-Only after an explicit tag cue, from clean `main` at the preflighted commit,
-the authorized GitHub user with MFA selects the intended tag before loading the
-approved external environment. The Make targets use Bash regardless of the
+Only after message review, a passing preflight and an explicit tag cue, from
+clean `main` at the preflighted commit, the authorized GitHub user with MFA
+runs the local tag target. The Make targets use Bash regardless of the
 operator's interactive shell (including zsh). Provide the approved ceremony
 variables as exported environment variables, or optionally export
 `STORAGEPRIMS_APPROVED_ENV_LOADER` pointing to an existing approved,
 shell-sourceable external script. The loader must be a readable, regular,
 non-symlink absolute file outside this repository; the target sources it
-privately and suppresses its output. Do not print loader paths, keys, or message
-contents. Run each command only after its own explicit cue:
+privately and suppresses its output. Do not print loader paths or keys; the
+prepare target previews only the finished public message. Run each tag command
+only after its own explicit cue:
 
 ```console
 $ STORAGEPRIMS_RELEASE_TAG=v0.1.2 make release-tag
@@ -154,7 +181,9 @@ $ STORAGEPRIMS_RELEASE_TAG=v0.1.2 make release-push-tag
 The optional loader pointer is not required when the ceremony variables are
 already exported. `release-tag` signs and
 verifies **locally only**; `release-push-tag` re-verifies the local object and
-live ruleset before a normal remote push and GitHub verification. Neither
+reports visible tag protection before a normal remote push and GitHub
+verification. A missing or inaccessible rule produces ABSENT/UNKNOWN advisory
+output, not a claim of protection or an exception to signature checks. Neither
 target loads a secret from the repository or creates a tag implicitly during
 the push step. Stop on any failing target; do not replace an existing tag.
 
@@ -276,4 +305,4 @@ gpg --homedir "$STORAGEPRIMS_GPG_HOMEDIR" --list-keys --with-subkey-fingerprint 
 ```
 
 If a key is expired, stop. Do not sign or publish until a reviewed replacement
-pin is on `main` and the tag ruleset is active.
+pin is on `main`; review the current tag-protection advisory separately.

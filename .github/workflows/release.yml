@@ -45,7 +45,7 @@ jobs:
       - name: Verify package archives without publishing
         run: make release-check
   verify-signature:
-    name: Verify pinned tag signature and publication policy
+    name: Verify pinned tag signature
     needs: validate
     runs-on: ubuntu-latest
     defaults:
@@ -70,7 +70,6 @@ jobs:
             '.tag == $tag and .object.type == "commit" and .object.sha == $commit and
              .verification.verified == true and .verification.reason == "valid"' \
             <<<"$tag_json" >/dev/null
-          ./scripts/release-guard-tag-ruleset.sh --read-only --verify-tag-attestation "$EXPECTED_OBJECT"
   build-ffi:
     name: FFI (${{ matrix.platform }})
     needs: validate

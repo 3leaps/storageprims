@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(dirname "$0")/release-tag-common.sh"
 cd "$tag_root"
 "$tag_root/scripts/release-verify-tag.sh"
-"$tag_root/scripts/release-guard-tag-ruleset.sh"
+"$tag_root/scripts/release-inspect-tag-ruleset.sh" "$STORAGEPRIMS_RELEASE_TAG"
 [[ -z "$(git ls-remote --tags origin "refs/tags/$STORAGEPRIMS_RELEASE_TAG")" ]] || tag_die 'remote tag already exists'
 git push origin "refs/tags/$STORAGEPRIMS_RELEASE_TAG"
 "$tag_root/scripts/release-verify-remote-tag.sh"

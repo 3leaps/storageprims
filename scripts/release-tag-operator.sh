@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Maintainer entrypoint for the distinct local-sign and remote-push targets.
+# Maintainer entrypoint for message preparation, local signing and remote push.
 set -euo pipefail
 
 mode="${1:-}"
 case "$mode" in
-local-tag | remote-push) ;;
+prepare-message | local-tag | remote-push) ;;
 *)
-	echo 'error: expected local-tag or remote-push' >&2
+	echo 'error: expected prepare-message, local-tag or remote-push' >&2
 	exit 1
 	;;
 esac
@@ -65,6 +65,10 @@ cd "$root" || {
 	echo 'error: loaded release tag differs from VERSION' >&2
 	exit 1
 }
+if [[ "$mode" == prepare-message ]]; then
+	export STORAGEPRIMS_RELEASE_TAG STORAGEPRIMS_TAG_MESSAGE_DIR
+	exec "$root/scripts/release-prepare-tag-message.py"
+fi
 export STORAGEPRIMS_RELEASE_TAG STORAGEPRIMS_TAG_MESSAGE_DIR \
 	STORAGEPRIMS_TAGGER_NAME STORAGEPRIMS_TAGGER_EMAIL \
 	STORAGEPRIMS_GPG_SIGNING_FINGERPRINT STORAGEPRIMS_PGP_KEY_ID \
@@ -85,6 +89,7 @@ tag_checkout
 }
 tag_key_selector
 tag_expected_message >/dev/null
+"$root/scripts/release-inspect-tag-ruleset.sh" "$STORAGEPRIMS_RELEASE_TAG"
 
 case "$mode" in
 local-tag) "$root/scripts/release-tag.sh" ;;

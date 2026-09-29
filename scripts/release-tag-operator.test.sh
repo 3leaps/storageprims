@@ -7,13 +7,17 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 mkdir -p "$scratch/repo/scripts" "$scratch/bin" "$scratch/external"
 cp "$root/scripts/release-tag-operator.sh" "$scratch/repo/scripts/"
+cat >"$scratch/repo/scripts/release-inspect-tag-ruleset.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s: synthetic tag-rule report for %s\n' "${REPORT:-FOUND}" "$1"
+SH
 printf '1.2.3\n' >"$scratch/repo/VERSION"
 cat >"$scratch/repo/scripts/release-tag-common.sh" <<'SH'
 tag_version() { printf 'version\n' >>"$TRACE"; [[ "$STORAGEPRIMS_RELEASE_TAG" == v1.2.3 && "$(pwd -P)" == "$FIXTURE_ROOT" ]]; }
 tag_identity() { printf 'identity\n' >>"$TRACE"; [[ "$STORAGEPRIMS_TAGGER_NAME" == approved ]]; }
 tag_checkout() { printf 'checkout\n' >>"$TRACE"; [[ "${FAIL_CHECKOUT:-0}" == 0 ]]; }
 tag_key_selector() { printf 'pin\n' >>"$TRACE"; [[ "${FAIL_PIN:-0}" == 0 ]]; }
-tag_expected_message() { printf 'message-ruleset\n' >>"$TRACE"; [[ "${FAIL_RULESET:-0}" == 0 ]]; }
+tag_expected_message() { printf 'message\n' >>"$TRACE"; [[ "${FAIL_MESSAGE:-0}" == 0 ]]; }
 SH
 cat >"$scratch/bin/git" <<'SH'
 #!/usr/bin/env bash
@@ -67,7 +71,7 @@ expect_fail env DIRTY=1 "$operator" local-tag
 expect_fail env BRANCH=feature "$operator" local-tag
 expect_fail env FAIL_CHECKOUT=1 "$operator" remote-push
 expect_fail env FAIL_PIN=1 "$operator" local-tag
-expect_fail env FAIL_RULESET=1 "$operator" remote-push
+expect_fail env FAIL_MESSAGE=1 "$operator" remote-push
 printf 'STORAGEPRIMS_TAGGER_NAME=approved\n' >"$scratch/external/valid"
 printf 'cd "$FIXTURE_AWAY"\nSTORAGEPRIMS_TAGGER_NAME=approved\n' >"$scratch/external/change-dir"
 export FIXTURE_AWAY="$scratch/external"
@@ -82,7 +86,7 @@ for mode in local-tag remote-push; do
 		[[ "$(tail -1 "$TRACE")" == push ]]
 		if grep -qx tag "$TRACE"; then exit 1; fi
 	fi
-	[[ "$(head -n 5 "$TRACE")" == $'version\nidentity\ncheckout\npin\nmessage-ruleset' ]]
+	[[ "$(head -n 5 "$TRACE")" == $'version\nidentity\ncheckout\npin\nmessage' ]]
 	: >"$TRACE"
 	env -u STORAGEPRIMS_TAGGER_NAME STORAGEPRIMS_APPROVED_ENV_LOADER="$scratch/external/change-dir" \
 		"$operator" "$mode" >"$scratch/output" 2>&1
@@ -91,6 +95,16 @@ for mode in local-tag remote-push; do
 	else
 		[[ "$(tail -1 "$TRACE")" == push ]]
 	fi
+	for report in ABSENT UNKNOWN; do
+		: >"$TRACE"
+		REPORT="$report" "$operator" "$mode" >"$scratch/output" 2>&1
+		grep -q "^$report: synthetic tag-rule report" "$scratch/output"
+		if [[ "$mode" == local-tag ]]; then
+			[[ "$(tail -1 "$TRACE")" == tag ]]
+		else
+			[[ "$(tail -1 "$TRACE")" == push ]]
+		fi
+	done
 done
 printf 'mv "$FIXTURE_ROOT" "$FIXTURE_ROOT.moved"\n' >"$scratch/external/move-root"
 for mode in local-tag remote-push; do
