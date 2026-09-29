@@ -53,6 +53,8 @@ checkout credential for that guard. The draft job has a write-scoped token, so
 it provides an authenticated Git header only while running the guard and removes
 that header before later draft steps create or update the release.
 
-After a tag workflow failure, confirm the draft exists and its unsigned asset
-inventory is complete before running `make release`. Repair the workflow and
-recreate the annotated tag only when the failed workflow did not create a draft.
+After a tag workflow failure, stop and investigate before running `make release`.
+Confirm any draft and its unsigned asset inventory, and use separately authorized
+recovery without recreating or moving a published signed tag. See the
+[release checklist](../RELEASE_CHECKLIST.md) for the distinct local-tag,
+remote-push, and later signing steps.
