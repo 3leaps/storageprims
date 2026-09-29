@@ -552,6 +552,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-decernor.test.sh
 	@./scripts/release-pin-precursors.test.sh
 	@./scripts/release-tag-controls.test.sh
+	@./scripts/release-tag-operator.test.sh
 	@./scripts/verify-pinned-tag.test.sh
 	@./scripts/release-crates.test.sh
 	@./scripts/release-crates-verify.test.sh
@@ -590,10 +591,10 @@ release-guard-tag-version: ## Validate the canonical release tag
 	@./scripts/release-guard-tag-version.sh
 
 release-tag: ## Create and verify a local signed version tag
-	@./scripts/release-tag.sh
+	@./scripts/release-tag-operator.sh local-tag
 
 release-push-tag: ## Publish and verify the signed version tag
-	@./scripts/release-push-tag.sh
+	@./scripts/release-tag-operator.sh remote-push
 
 release-verify-tag: ## Verify the tag using only the committed public pin
 	@./scripts/release-verify-tag.sh

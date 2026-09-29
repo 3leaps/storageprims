@@ -13,6 +13,7 @@ first cut using this gate.
 - `gh` is authenticated for `3leaps/storageprims`
 - Approved signing material is loaded from an external secret store without
   printing values or paths
+- The authorized GitHub user with registered MFA runs both tag Make targets
 
 Required ceremony variables:
 
@@ -134,17 +135,28 @@ beginning. Never overwrite an existing pin.
 ## 2. Create the signed tag and unsigned draft
 
 Only after an explicit tag cue, from clean `main` at the preflighted commit,
-set the intended `STORAGEPRIMS_RELEASE_TAG` before loading the approved external
-environment so it selects the matching per-cut message directory. Confirm the
-directory ends in that tag and contains `message.txt`:
+the authorized GitHub user with MFA selects the intended tag before loading the
+approved external environment. The Make targets use Bash regardless of the
+operator's interactive shell (including zsh). Provide the approved ceremony
+variables as exported environment variables, or optionally export
+`STORAGEPRIMS_APPROVED_ENV_LOADER` pointing to an existing approved,
+shell-sourceable external script. The loader must be a readable, regular,
+non-symlink absolute file outside this repository; the target sources it
+privately and suppresses its output. Do not print loader paths, keys, or message
+contents. Run each command only after its own explicit cue:
 
-```bash
-: "${STORAGEPRIMS_RELEASE_TAG:?load the approved cut}"
-: "${STORAGEPRIMS_TAG_MESSAGE_DIR:?load the external per-cut message dir}"
-test -s "${STORAGEPRIMS_TAG_MESSAGE_DIR}/message.txt"
-make release-tag          # creates and verifies locally, no push
-make release-push-tag     # explicit maintainer action; verifies remote object
+```console
+$ STORAGEPRIMS_RELEASE_TAG=v0.1.2 make release-tag
+# Stop; review the locally verified tag object before a separate remote-push cue.
+$ STORAGEPRIMS_RELEASE_TAG=v0.1.2 make release-push-tag
 ```
+
+The optional loader pointer is not required when the ceremony variables are
+already exported. `release-tag` signs and
+verifies **locally only**; `release-push-tag` re-verifies the local object and
+live ruleset before a normal remote push and GitHub verification. Neither
+target loads a secret from the repository or creates a tag implicitly during
+the push step. Stop on any failing target; do not replace an existing tag.
 
 - [ ] Confirm the tag workflow is green
 - [ ] Confirm the tag has GitHub **Verified** status and the
