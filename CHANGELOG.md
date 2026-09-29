@@ -11,6 +11,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-28
+
+- Add guarded crates.io publication tooling and package checks for the Rust
+  workspace, including ordered dependency publishing and registry verification.
+- Add signed-tag verification guards, a public OpenPGP signing key pin, and
+  fingerprint anchors for the public OpenPGP and minisign keys.
+- Add public-source reference checks and clarify the maintainer release
+  checklist.
+- Configure explicit S3 client features without changing the public storage
+  contracts.
+
 ## [0.1.1] - 2026-09-22
 
 - Rust callers can bind a get, head, or range to a native version or a
@@ -43,6 +54,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Add unsigned native FFI release artifacts and a local MFA signing and
   verification workflow
 
-[Unreleased]: https://github.com/3leaps/storageprims/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/3leaps/storageprims/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/3leaps/storageprims/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/3leaps/storageprims/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/3leaps/storageprims/releases/tag/v0.1.0
