@@ -42,6 +42,7 @@ if [[ -n "${STORAGEPRIMS_PGP_KEY_ID:-}" || -n "${STORAGEPRIMS_GPG_HOMEDIR:-}" ]]
 fi
 
 for manifest in SHA256SUMS SHA512SUMS; do
+	printf '[info] Signing %s with minisign; enter the minisign key passphrase if prompted (one prompt per manifest).\n' "$manifest"
 	minisign -S -s "$STORAGEPRIMS_MINISIGN_KEY" \
 		-m "$directory/$manifest" \
 		-t "storageprims $tag" \
