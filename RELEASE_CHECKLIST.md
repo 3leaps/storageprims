@@ -187,7 +187,11 @@ output, not a claim of protection or an exception to signature checks. Neither
 target loads a secret from the repository or creates a tag implicitly during
 the push step. Stop on any failing target; do not replace an existing tag.
 
-- [ ] Confirm the tag workflow is green
+- [ ] Confirm the tag workflow is green, or the separately authorized
+      `v0.1.2` draft-recovery workflow is green for the existing signed tag.
+      Recovery runs from reviewed `main` with the approved tag object and
+      tagged commit, refuses an existing release, and creates only an unsigned
+      draft. Never recreate, move or force-push the signed tag.
 - [ ] Confirm the tag has GitHub **Verified** status and the
       `verify-signature` gate passed before a draft is created
 - [ ] Confirm the GitHub release is still a draft

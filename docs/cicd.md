@@ -47,14 +47,20 @@ The tag-triggered release workflow creates the unsigned GitHub draft before the
 local signing ceremony begins. `make release` requires that draft and stops at
 `release-download` when it is absent.
 
-The strict release guard fetches the release tag and `origin/main` to confirm
-their exact relationship. The read-only validation job retains its read-scoped
-checkout credential for that guard. The draft job has a write-scoped token, so
-it provides an authenticated Git header only while running the guard and removes
-that header before later draft steps create or update the release.
+The strict tag-triggered release guard checks the annotated tag against the
+remote tag and `origin/main`. The read-only validation job retains its
+read-scoped checkout credential for that guard. The draft job has a
+write-scoped token, so it provides an authenticated Git header only while
+running the guard and removes that header before later draft steps create or
+update the release.
 
 After a tag workflow failure, stop and investigate before running `make release`.
 Confirm any draft and its unsigned asset inventory, and use separately authorized
 recovery without recreating or moving a published signed tag. See the
 [release checklist](../RELEASE_CHECKLIST.md) for the distinct local-tag,
 remote-push, and later signing steps.
+
+The separately authorized `v0.1.2` draft-recovery workflow is dispatched from
+reviewed `main` with the existing signed tag object and tagged commit. It
+verifies the committed public pin and GitHub signature, builds unsigned assets
+from the tagged tree, refuses to overwrite a release, and creates a draft only.
