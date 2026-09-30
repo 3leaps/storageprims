@@ -60,7 +60,7 @@ recovery without recreating or moving a published signed tag. See the
 [release checklist](../RELEASE_CHECKLIST.md) for the distinct local-tag,
 remote-push, and later signing steps.
 
-The separately authorized `v0.1.2` draft-recovery workflow is dispatched from
-reviewed `main` with the existing signed tag object and tagged commit. It
-verifies the committed public pin and GitHub signature, builds unsigned assets
-from the tagged tree, refuses to overwrite a release, and creates a draft only.
+After checkout, the tag-triggered workflow restores the runner-local annotated
+ref from origin before validation, signature verification, and draft inventory
+checks. Draft creation uses a create-only request; a release conflict or partial
+asset upload stops for inspection without replacing an existing release.

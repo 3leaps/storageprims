@@ -3,17 +3,25 @@
 set -euo pipefail
 
 main() {
-	local tag=v0.1.2 commit=1666a2ee3166f2b764514fef36794dfd514967d1
+	local tag commit
 	local directory=dist/release response id notes name asset
-	[[ "${STORAGEPRIMS_RELEASE_TAG:-}" == "$tag" &&
-		"${STORAGEPRIMS_EXPECTED_COMMIT:-}" == "$commit" ]] || {
-		echo 'error: recovery cut does not match the approved tag and commit' >&2
+	source scripts/release-common.sh
+	tag="$(release_tag)"
+	commit="${STORAGEPRIMS_EXPECTED_COMMIT:-}"
+	[[ "$commit" =~ ^[0-9a-f]{40}$ && "$(git rev-parse HEAD)" == "$commit" ]] || {
+		echo 'error: draft commit differs from validated tag target' >&2
 		exit 1
 	}
 	[[ -z "${GH_REPO+x}" ]] || {
 		echo 'error: GH_REPO must be unset' >&2
 		exit 1
 	}
+	[[ "${STORAGEPRIMS_EXPECTED_TAG_OBJECT:-}" =~ ^[0-9a-f]{40}$ ]] || {
+		echo 'error: validated annotated tag object is required' >&2
+		exit 1
+	}
+	# Repeat the remote/local tag-object binding immediately before creation.
+	./scripts/release-restore-tag-ref.sh
 	./scripts/validate-release-assets.sh "$directory" base
 	notes="docs/releases/$tag.md"
 	[[ -s "$notes" && ! -L "$notes" ]] || {
@@ -39,7 +47,6 @@ main() {
 
 	# Upload only the exact, previously validated base inventory. Uploading by
 	# release ID cannot target a different release. No --clobber or overwrite path.
-	source scripts/release-common.sh
 	while IFS= read -r name; do
 		[[ "$name" =~ ^[A-Za-z0-9._-]+$ && -f "$directory/$name" && ! -L "$directory/$name" ]] || {
 			echo 'error: unsafe release asset; draft may be partial' >&2
@@ -58,7 +65,7 @@ main() {
 			exit 1
 		}
 	done < <(release_base_assets)
-	echo '[ok] create-only unsigned recovery draft assets uploaded'
+	echo '[ok] create-only unsigned draft assets uploaded'
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
