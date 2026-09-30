@@ -15,7 +15,8 @@ registry_wait() {
 registry_api_check() {
 	local crate="$1" version="$2" response
 	response="$(curl --fail --silent --show-error --retry 3 \
-		"https://crates.io/api/v1/crates/${crate}/${version}")"
+		--user-agent storageprims-release-verification \
+		"https://crates.io/api/v1/crates/${crate}/${version}")" || return 1
 	jq -e --arg name "$crate" --arg version "$version" \
 		'.version.num == $version and .version.crate == $name and .version.yanked == false' \
 		<<<"$response" >/dev/null || {

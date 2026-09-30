@@ -233,6 +233,11 @@ exported publics against the anchors staged into the signed set.
 7. Verify once, upload the explicit provenance set, and recheck the exact
    remote inventory
 
+Each minisign manifest signature may prompt for the minisign secret-key
+passphrase. The terminal identifies the manifest and prompt purpose; two
+prompts are expected when signing the two manifests. Never paste a passphrase
+or secret-key path into command receipts or release notes.
+
 - [ ] Confirm the release remains a draft after upload
 - [ ] Independently download into an empty directory and verify both checksum
       manifests and minisign signatures
@@ -251,13 +256,43 @@ validate it with `make release-crates-list`. The FFI crate and any future CLI
 are unpublished (`publish = false`). The list orders dependencies, including
 dev dependencies.
 
-After the tag exists on origin, use a clean detached checkout of the exact
-tag and recheck `STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version`.
-Re-run `make release-verify-remote-tag` before the dry run and each registry
-publication. The signed tag is the provenance root for registry publication.
-Run `make release-crates-dry-run` for all publishable crates. This uses local
-path patches only for earlier workspace crates that have not yet reached the
-registry; it does not upload them. Optionally confirm that
+### Enter the exact tagged checkout
+
+This registry procedure can be run independently of the signing ceremony.
+Load the approved external environment, select the tag, and start with a clean
+checkout. Note the starting branch (`git branch --show-current`) so you can
+return after **all** release work is complete. Do not discard changes to make
+the checkout clean.
+
+The tag and exact-version examples in this section are for the **v0.1.2 cut**.
+For a future cut, match the selected tag to `v$(cat VERSION)` and use that
+version in the registry queries; do not copy a previous cut's tag or version.
+
+```bash
+export STORAGEPRIMS_RELEASE_TAG=v0.1.2
+test -z "$(git status --porcelain)" # stop if this fails
+git fetch origin \
+  "+refs/heads/main:refs/remotes/origin/main" \
+  "+refs/tags/${STORAGEPRIMS_RELEASE_TAG}:refs/tags/${STORAGEPRIMS_RELEASE_TAG}"
+git checkout --detach "$STORAGEPRIMS_RELEASE_TAG"
+STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
+make release-verify-tag
+make release-verify-remote-tag
+make release-crates-list
+make release-crates-dry-run
+```
+
+Run commands in order and stop at the first failure. The strict guard requires
+detached `HEAD`, a clean tree, and identical tag/`HEAD`/fetched `origin/main`
+commits; the remote verifier checks the signed annotated object and GitHub
+verification. Keep `main` fixed throughout the ceremony.
+
+The Make dry-run rehearsal uses local path patches for **all earlier entries**
+in the publication list, whether or not they are already on the registry. It
+does not upload anything or prove unpatched registry dependency resolution.
+The per-crate dry runs below test that resolution after predecessors are
+indexed. Cargo may print `Uploading` followed by `aborting upload due to dry
+run`; that warning is expected, not an actual upload. Optionally confirm that
 `cargo publish --dry-run -p storageprims-ffi` fails as unpublished (and do
 the same for a future `storageprims-cli`).
 
@@ -271,26 +306,102 @@ of each new name, confirm it is unclaimed with
 only for the specific publish command. Do not use `cargo login`, which persists
 plaintext in Cargo credentials.
 
-Only after an explicit publish cue, run the following **one crate at a time**
-in the order printed by `make release-crates-list`. Set `crate` to the next
-list entry before each pass:
+An explicit crate-not-found response establishes that a name is unclaimed;
+network, authentication, rate-limit, or server failures do not. If a name
+exists, check ownership and whether the intended version already exists before
+publishing. Never retry an already successful publication.
+
+An updates-only token used for a first upload can produce:
+
+```text
+error: failed to publish storageprims-core v0.1.2
+the remote server responded with an error (status 403 Forbidden):
+this token does not have the required permissions to perform this action
+```
+
+This illustrates a permission failure, not a diagnosis unique to missing
+`publish-new`. Check token scopes, name restrictions, ownership, and expiry;
+inspect registry state before retrying. Do not include token values in receipts.
+
+### Publish one crate at a time — confirm the actual list output
+
+The literal examples below match the current `make release-crates-list` order:
+**core → s3 → ops**, including the ops development dependency on s3. Confirm
+that output before following the examples. The maintainer runs each approved
+publication with the scoped token loaded only for that command. Stop on any
+failure or intervening hold; do not paste the entire sequence as a batch.
+
+For core:
 
 ```bash
-make release-crates-list
-cargo publish --locked -p "${crate:?set the next ordered crate}"
-make release-crates-verify CRATE="$crate"
-# Repeat the previous two commands for each remaining entry; after the last:
+STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
+make release-verify-remote-tag
+cargo publish --dry-run --locked -p storageprims-core
+cargo publish --locked -p storageprims-core
+make release-crates-verify CRATE=storageprims-core
+```
+
+Only after core verification succeeds, run s3:
+
+```bash
+STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
+make release-verify-remote-tag
+cargo publish --dry-run --locked -p storageprims-s3
+cargo publish --locked -p storageprims-s3
+make release-crates-verify CRATE=storageprims-s3
+```
+
+Only after s3 verification succeeds, run ops and the final all-list check:
+
+```bash
+STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
+make release-verify-remote-tag
+cargo publish --dry-run --locked -p storageprims-ops
+cargo publish --locked -p storageprims-ops
+make release-crates-verify CRATE=storageprims-ops
 make release-crates-verify
 ```
 
-Immediately before **each** upload, reconfirm the cue; any intervening hold
-stops the sequence. Each verification waits for `cargo info --registry crates-io
-<crate>@<version>` (including after the last crate), and checks the exact
-version on the crates.io API. The final command rechecks the entire list. Never use bare
-`cargo info` as proof: it may resolve a local workspace crate. Review the
-registry pages and docs.rs builds after the final check. If the tag Release
+The unpatched dependent dry runs must wait for their predecessors to reach the
+index. Keep `--locked` and normal package/build verification; do not edit the
+lockfile or use `--no-verify`/`--allow-dirty` to bypass a failure. Repeat the
+strict/remote checks immediately before upload if the command sequence was
+interrupted.
+
+Each Make verification waits for the exact registry version and checks the
+crates.io API for the exact name/version and `yanked=false`. To inspect the
+**0.1.2 example cut** manually, use the following. For future cuts, use the
+version in `VERSION` that matches the selected release tag:
+
+```bash
+cargo info --registry crates-io storageprims-core@0.1.2
+cargo info --registry crates-io storageprims-s3@0.1.2
+cargo info --registry crates-io storageprims-ops@0.1.2
+```
+
+With no `@version`, an explicit registry query shows the latest version, not
+necessarily this cut. Never use bare `cargo info` as registry proof: it may
+resolve a local workspace crate. Review the registry pages and **separately**
+check docs.rs builds for this version; index/API success does not establish a
+documentation build. If the tag Release
 workflow's package check failed while registry dependencies were unavailable,
 rerun it after the index exposes this version, before signing the draft.
+
+### Return to the starting branch
+
+After **all** strict signing and registry work is complete, confirm the tree
+is clean and reattach to the branch you noted earlier. If you started on main:
+
+```bash
+git status --short
+test -z "$(git status --porcelain)" # stop if this fails
+git switch main
+```
+
+Do not reset or discard unexpected work. If using a separate detached worktree,
+remove it only after confirming it contains no work to preserve. Returning to a
+branch before finishing the ceremony causes the strict detached-checkout guard
+to fail.
 
 ## Rotate release signing keys
 
