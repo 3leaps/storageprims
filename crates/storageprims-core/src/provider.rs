@@ -18,6 +18,7 @@ pub type BoxedByteStream = Box<dyn AsyncRead + Send + Unpin>;
 /// Optional provider capabilities beyond the universal contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Capability {
     DelimiterListing,
     MultipartUpload,
@@ -30,6 +31,12 @@ pub enum Capability {
 
 /// Optional native delimiter/common-prefix listing operation.
 pub trait DelimiterListingProvider: Send + Sync {
+    /// Advisory discovery; unknown external support is not optimistic support.
+    /// Direct calls remain available and must validate their own request.
+    fn supports_delimiter(&self, _delimiter: &str) -> bool {
+        false
+    }
+
     fn list_delimited(&self, request: DelimiterListRequest) -> BoxFuture<'_, DelimiterListResult>;
 }
 
@@ -89,6 +96,16 @@ pub fn require_guarded_reads(
 
 /// Canonical storage provider trait for v0.1.
 pub trait StorageProvider: Send + Sync {
+    /// Optional whole-object reads carrying selected-response evidence.
+    fn read_responses(&self) -> Option<&dyn crate::ReadResponseProvider> {
+        None
+    }
+
+    /// Optional predicate-specific, provider-bound write admission.
+    fn admitted_puts(&self) -> Option<&dyn crate::AdmittedPutProvider> {
+        None
+    }
+
     fn provider_kind(&self) -> ProviderKind;
 
     fn capabilities(&self) -> Vec<Capability>;
@@ -267,6 +284,8 @@ mod tests {
     fn external_style_provider_keeps_default_guarded_read_refusal() {
         let provider: Box<dyn StorageProvider> = Box::new(DummyProvider);
         assert!(provider.guarded_reads().is_none());
+        assert!(provider.read_responses().is_none());
+        assert!(provider.admitted_puts().is_none());
         let error =
             match require_guarded_reads(provider.as_ref(), crate::StorageOperation::GuardedGet) {
                 Ok(_) => panic!("default hook must refuse the optional extension"),
