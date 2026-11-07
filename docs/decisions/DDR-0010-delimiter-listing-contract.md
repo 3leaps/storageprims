@@ -1,7 +1,7 @@
 # DDR-0010: Delimiter Listing Contract
 
-> **Status**: Accepted
-> **Date**: 2026-09-21
+> **Status**: Accepted-as-amended
+> **Date**: 2026-09-21 (amended 2026-10-01)
 > **Authors**: entarch, devlead, secrev
 
 ## Context
@@ -68,6 +68,44 @@ Request debug and display output redact continuation tokens. Errors do not echo
 raw prefix, delimiter, or token values. Provider rejection of a continuation
 token maps to `InvalidArgument` for `continuation_token`; the universal list
 error mapping is unchanged.
+
+### Amendment: Delimiter discovery and bounded local `/` directory paging
+
+`DelimiterListingProvider` adds an advisory discovery method with a conservative
+default:
+
+```rust
+fn supports_delimiter(&self, _delimiter: &str) -> bool {
+    false
+}
+```
+
+Unknown external support reports `false` without disabling direct `list_delimited`
+calls on legacy implementations, and `list_delimited` still validates every
+request directly. An S3 adapter overrides `supports_delimiter` to return `true`
+for valid delimiters (`1..=1024` UTF-8 bytes with no NUL, C0, or DEL); this
+contract record does not claim that a concrete S3 adapter exposes that override
+prior to its extension update. `LocalProvider` overrides `supports_delimiter` to
+return `true` only for `"/"` and rejects any other delimiter as
+`StorageError::InvalidArgument` for `delimiter` before filesystem I/O.
+
+Because a local directory has no server-side page cursor, `LocalProvider` implements
+one `"/"` delimiter page as a bounded single-directory scan over the containing
+directory before the final `"/"` in `prefix` (see
+[DDR-0012](DDR-0012-local-provider.md)):
+
+- `max_keys` omitted or `0` resolves to `1000`, explicit `1..=1000` is accepted,
+  and values above `1000` fail with `InvalidArgument` before I/O (S3 `max_keys`
+  acceptance and single-native-page behavior remain unchanged).
+- Objects and `name/` directory common prefixes share `K` and a `K + 1` candidate
+  selection pool in UTF-8 byte order while preserving separate sorted `objects` and
+  `common_prefixes` output collections; no descent into subdirectories occurs.
+- Native directories—including empty directories—appear in `common_prefixes` as
+  explicit filesystem hierarchy entries rather than cloud zero-byte marker
+  inference.
+- Each request enforces the `100,000` examined-entry and `10,000`-millisecond
+  monotonic deadline caps, failing with `StorageError::Inspection`
+  (`InspectionKind::LimitExceeded`) rather than returning an unproven short page.
 
 ## Consequences
 

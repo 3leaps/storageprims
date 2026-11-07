@@ -520,7 +520,7 @@ p = pathlib.Path('Cargo.toml'); \
 text = p.read_text(); \
 text, n = re.subn(r'(?m)^version = \"[^\"]*\"', 'version = \"%s\"' % ver, text, count=1); \
 assert n == 1, 'failed to update [workspace.package] version'; \
-text = re.sub(r'(storageprims-(?:core|ops|s3|ffi) = \{ version = )\"[^\"]*\"', r'\1\"%s\"' % ver, text); \
+text = re.sub(r'(storageprims-(?:core|local|ops|s3|ffi) = \{ version = )\"[^\"]*\"', r'\1\"%s\"' % ver, text); \
 p.write_text(text); \
 " "$$ver" || exit 1; \
 		echo "[ok] Synced Cargo.toml to $$ver (python fallback)"; \

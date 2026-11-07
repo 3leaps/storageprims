@@ -18,8 +18,9 @@ records for storageprims.
 | DDR-0004 | Design   | [Optional Capability Model](DDR-0004-optional-capability-model.md)                                                                           | Accepted-as-amended | 2026-03-16 |
 | DDR-0008 | Design   | [Source-Guarded Read Contract](DDR-0008-source-guarded-read-contract.md)                                                                     | Accepted            | 2026-09-21 |
 | DDR-0009 | Design   | [Bounded Inspection Contract](DDR-0009-bounded-inspection-contract.md)                                                                       | Accepted            | 2026-09-21 |
-| DDR-0010 | Design   | [Delimiter Listing Contract](DDR-0010-delimiter-listing-contract.md)                                                                         | Accepted            | 2026-09-21 |
+| DDR-0010 | Design   | [Delimiter Listing Contract](DDR-0010-delimiter-listing-contract.md)                                                                         | Accepted-as-amended | 2026-09-21 |
 | DDR-0011 | Design   | [Bounded One-Object Relay](DDR-0011-bounded-relay.md)                                                                                        | Proposed            | 2026-10-01 |
+| DDR-0012 | Design   | [Rooted Local Provider and Bounded Lexical Listing](DDR-0012-local-provider.md)                                                              | Proposed            | 2026-10-01 |
 | DDR-0013 | Design   | [Receipt-Bearing Reads and Admitted Writes](DDR-0013-core-extension-contracts.md)                                                            | Proposed            | 2026-10-01 |
 | DDR-0005 | Design   | [Copy Semantics Across Same-Provider and Cross-Provider Targets](DDR-0005-copy-semantics-across-same-provider-and-cross-provider-targets.md) | Approved            | 2026-03-16 |
 | DDR-0006 | Design   | [Provider Configuration Surface and Credential Representation](DDR-0006-provider-configuration-surface-and-credential-representation.md)     | Proposed            | 2026-03-16 |
@@ -35,14 +36,14 @@ records for storageprims.
 
 ## Current Implementation Snapshot
 
-| Area                | Current state                                                                                                  |
-| ------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Providers           | S3 and S3-compatible storage implemented; GCS, Azure Blob, and local filesystem planned                        |
-| Rust workspace      | Core contracts, line-oriented operations, and S3 provider implemented                                          |
-| FFI                 | C ABI implemented on Unix/POSIX; Windows FFI planned                                                           |
-| Bindings and CLI    | Go, TypeScript, and CLI planned                                                                                |
-| Optional operations | Conditional put, guarded read, and Rust delimiter listing implemented; multipart upload planned                |
-| Error detail        | Canonical classes and coarse FFI codes/messages implemented; structured FFI provider/operation context planned |
+| Area                | Current state                                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Providers           | S3 / S3-compatible and rooted local filesystem (Rust) implemented; GCS and Azure Blob planned              |
+| Rust workspace      | Core contracts, line/relay operations, S3 provider, and local filesystem provider implemented              |
+| FFI                 | C ABI implemented on Unix/POSIX (S3); Windows FFI and local FFI not exposed                                |
+| Bindings and CLI    | Go, TypeScript, and CLI planned                                                                            |
+| Optional operations | Conditional put, guarded read (S3), receipt/admitted relay hooks, and Rust delimiter listing implemented   |
+| Error detail        | Canonical classes and coarse FFI codes/messages implemented; structured FFI inspection context implemented |
 
 ## Near-Term Activity Map
 
@@ -150,4 +151,7 @@ Before another provider or language binding is added, storageprims should have a
 6. ADR-0006
 
 Those six decisions stop the most expensive forms of cross-language and
-cross-repository drift.
+cross-repository drift. Rust-only provider crates that introduce no C ABI
+constructors or language-binding distribution artifacts (such as
+`storageprims-local` under [DDR-0012](DDR-0012-local-provider.md)) are explicitly
+exempt from waiting on ADR-0006.

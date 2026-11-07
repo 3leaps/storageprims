@@ -25,11 +25,24 @@ path = pathlib.Path(sys.argv[1]) / "release-crates.py"
 spec = importlib.util.spec_from_file_location("release_crates", path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-names = ["storageprims-core", "storageprims-s3", "storageprims-ops"]
+names = [
+    "storageprims-core",
+    "storageprims-s3",
+    "storageprims-local",
+    "storageprims-ops",
+]
 packages = [
     {"name": "storageprims-core", "publish": None, "dependencies": []},
     {"name": "storageprims-s3", "publish": None, "dependencies": [{"name": "storageprims-core"}]},
-    {"name": "storageprims-ops", "publish": None, "dependencies": [{"name": "storageprims-s3", "kind": "dev"}]},
+    {"name": "storageprims-local", "publish": None, "dependencies": [{"name": "storageprims-core"}]},
+    {
+        "name": "storageprims-ops",
+        "publish": None,
+        "dependencies": [
+            {"name": "storageprims-s3", "kind": "dev"},
+            {"name": "storageprims-local", "kind": "dev"},
+        ],
+    },
     {"name": "storageprims-ffi", "publish": [], "dependencies": []},
 ]
 manifests = {name: {"package": {"publish": True}} for name in names}
