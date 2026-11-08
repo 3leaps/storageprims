@@ -1,7 +1,7 @@
 # DDR-0012: Rooted Local Provider and Bounded Lexical Listing
 
-> **Status**: Proposed
-> **Date**: 2026-10-01
+> **Status**: Accepted
+> **Date**: 2026-10-01 (ratified 2026-11-07)
 > **Authors**: entarch, devlead, devrev, secrev
 
 ## Context
@@ -40,8 +40,10 @@ providing atomic no-replace rename: macOS, Linux/Android, and Windows)
 ### Containment, namespace, and error redaction
 
 - **Handle-relative no-follow traversal**: Root construction opens the configured
-  directory without following symlinks or reparse points (`O_RDONLY | O_DIRECTORY |
-O_NOFOLLOW | O_CLOEXEC` on Unix; non-inheritable directory handle opened with
+  directory without following a symlink or reparse point on the root leaf itself
+  (`O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC` on Unix, which permits standard
+  host symlinked ancestor prefixes such as `/tmp` -> `/private/tmp` while rejecting a
+  symlinked final root component; non-inheritable directory handle opened with
   `FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT` and verified against
   reparse tags on Windows). Every subsequent lookup, directory creation, staging
   file creation, publication, deletion, and scan step resolves component-by-component
@@ -99,7 +101,10 @@ entries by another actor.
     refused without silent dropping or sidecar files.
 - **Cleanup, durability, and commit knowledge**: Cleanup is confined strictly to the
   current attempt's owned temporary entry; unknown or stale temporary files are never
-  automatically swept. Sync or write failure prior to rename unlinks the owned
+  automatically swept. Missing intermediate parent directories created prior to
+  staging are retained if a write later aborts (and may appear as empty-directory
+  common prefixes under `"/"` delimiter listing). Sync or write failure prior to
+  rename unlinks the owned
   temporary entry and reports `CommitKnowledge::NotCommitted`. An indeterminate
   rename I/O failure reports `CommitKnowledge::Unknown` without unlinking. On Unix,
   the provider additionally calls `fsync` on the opened parent directory descriptor
@@ -209,10 +214,12 @@ and a `10`-second monotonic deadline (`InspectionLimitDimension::Deadline`,
   `StorageError::Other` (`provider: Some(ProviderKind::Local)`,
   `operation: Some(StorageOperation::List)`).
 - **Opaque scoped continuation tokens**: Continuation tokens are versioned,
-  `1..=8192` bytes, path-free, and scoped to `(root_identity, mode, prefix,
-delimiter, resolved_max_keys)`. Omitted, `0`, and explicit `1000` resolve to the
-  same page-size scope. Malformed, oversized, tampered, or cross-scope tokens fail
-  as `StorageError::InvalidArgument` for `continuation_token` before walking.
+  `1..=8192` bytes, path-free, process-local (authenticated with a per-process random
+  key and not replayable across process restarts or separate OS processes), and scoped
+  to `(root_identity, mode, prefix, delimiter, resolved_max_keys)`. Omitted, `0`, and
+  explicit `1000` resolve to the same page-size scope. Malformed, oversized, tampered,
+  cross-process, or cross-scope tokens fail as `StorageError::InvalidArgument` for
+  `continuation_token` before walking.
   Resuming re-scans from the prefix base directory, skipping branches strictly
   before the cursor while descending into any ancestor branch containing the cursor
   key. Listing is not snapshot-isolated under concurrent mutation, and access errors

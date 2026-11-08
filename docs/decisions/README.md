@@ -20,7 +20,7 @@ records for storageprims.
 | DDR-0009 | Design   | [Bounded Inspection Contract](DDR-0009-bounded-inspection-contract.md)                                                                       | Accepted            | 2026-09-21 |
 | DDR-0010 | Design   | [Delimiter Listing Contract](DDR-0010-delimiter-listing-contract.md)                                                                         | Accepted-as-amended | 2026-09-21 |
 | DDR-0011 | Design   | [Bounded One-Object Relay](DDR-0011-bounded-relay.md)                                                                                        | Proposed            | 2026-10-01 |
-| DDR-0012 | Design   | [Rooted Local Provider and Bounded Lexical Listing](DDR-0012-local-provider.md)                                                              | Proposed            | 2026-10-01 |
+| DDR-0012 | Design   | [Rooted Local Provider and Bounded Lexical Listing](DDR-0012-local-provider.md)                                                              | Accepted            | 2026-10-01 |
 | DDR-0013 | Design   | [Receipt-Bearing Reads and Admitted Writes](DDR-0013-core-extension-contracts.md)                                                            | Proposed            | 2026-10-01 |
 | DDR-0005 | Design   | [Copy Semantics Across Same-Provider and Cross-Provider Targets](DDR-0005-copy-semantics-across-same-provider-and-cross-provider-targets.md) | Approved            | 2026-03-16 |
 | DDR-0006 | Design   | [Provider Configuration Surface and Credential Representation](DDR-0006-provider-configuration-surface-and-credential-representation.md)     | Proposed            | 2026-03-16 |
