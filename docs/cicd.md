@@ -27,6 +27,7 @@ and the [3 Leaps OSS Sensitive Local Data Policy](https://github.com/3leaps/oss-
 - `make test`
 - `make deny`
 - `make test-integration-s3`
+- `make test-integration-ops`
 - `make test-integration-ffi`
 
 This sequence is designed to catch the common blind spot where formatting or
@@ -34,7 +35,7 @@ generated headers are stale locally even though narrower Rust-only checks pass.
 
 ## Notes
 
-- `test-integration-s3` and `test-integration-ffi` expect LocalStack to be
+- `test-integration-s3`, `test-integration-ops`, and `test-integration-ffi` expect LocalStack to be
   available through `docker compose -f docker-compose.localstack.yml up -d localstack`.
 - `make pr-final` is a local contributor gate. CI still runs its own workflow
   jobs and remains the source of truth for branch protection.

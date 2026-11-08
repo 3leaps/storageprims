@@ -5,13 +5,7 @@
 # Graph Configuration
 # ============================================================================
 [graph]
-targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "aarch64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-    "aarch64-pc-windows-msvc",
-]
+all-features = true
 
 # ============================================================================
 # Output Configuration
@@ -24,13 +18,13 @@ feature-depth = 1
 # ============================================================================
 [advisories]
 ignore = [
-    # Upstream AWS SDK: aws-smithy-http-client still ships hyper-rustls 0.24 /
-    # rustls 0.21 alongside the modern rustls 0.23 stack. Tracked upstream in
-    # smithy-rs; no fix available via dependency pin alone (verified at SDK 1.10.1).
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0104",
-    "RUSTSEC-2026-0258",
+    # Upstream AWS SDK (pinned at aws-config 1.10.1 / aws-sdk-s3 1.142.0 for MSRV 1.94.1):
+    # - RUSTSEC-2026-0387: aws-sigv4 1.5.1 -> p256 0.13.2 depends on crypto-bigint 0.5.x
+    #   (patched in breaking 0.7.6; no semver-compatible upgrade available).
+    # - RUSTSEC-2026-0441: aws-smithy-{types,http,runtime} still depend on archived
+    #   pin-utils 0.1.0 (unmaintained; no upstream replacement release yet).
+    "RUSTSEC-2026-0387",
+    "RUSTSEC-2026-0441",
 ]
 
 # ============================================================================
@@ -38,6 +32,7 @@ ignore = [
 # ============================================================================
 [licenses]
 confidence-threshold = 0.93
+include-dev = true
 
 allow = [
     "MIT",

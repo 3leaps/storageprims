@@ -161,6 +161,15 @@ jobs:
           AWS_REQUEST_CHECKSUM_CALCULATION: when_required
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
         run: cargo nextest run -p storageprims-s3 --features integration --test integration_s3
+      - name: Run ops relay integration tests
+        env:
+          STORAGEPRIMS_S3_TEST_ENDPOINT: http://127.0.0.1:4566
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_REGION: us-east-1
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: cargo nextest run -p storageprims-ops --features integration --test integration_relay
       - name: Stop LocalStack
         if: always()
         run: docker compose -f docker-compose.localstack.yml down -v

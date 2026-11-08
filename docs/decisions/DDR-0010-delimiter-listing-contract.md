@@ -82,10 +82,9 @@ fn supports_delimiter(&self, _delimiter: &str) -> bool {
 
 Unknown external support reports `false` without disabling direct `list_delimited`
 calls on legacy implementations, and `list_delimited` still validates every
-request directly. An S3 adapter overrides `supports_delimiter` to return `true`
-for valid delimiters (`1..=1024` UTF-8 bytes with no NUL, C0, or DEL); this
-contract record does not claim that a concrete S3 adapter exposes that override
-prior to its extension update. `LocalProvider` overrides `supports_delimiter` to
+request directly. `S3Provider` overrides `supports_delimiter` to return `true`
+for valid delimiters (`1..=1024` UTF-8 bytes with no NUL, C0, or DEL).
+`LocalProvider` overrides `supports_delimiter` to
 return `true` only for `"/"` and rejects any other delimiter as
 `StorageError::InvalidArgument` for `delimiter` before filesystem I/O.
 

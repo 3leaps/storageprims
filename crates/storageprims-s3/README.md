@@ -13,4 +13,9 @@ prove authorization for list, get, put, or other object operations.
 Supply at most one non-empty root source: either the URI path or
 `TargetConfig.root_prefix`.
 
+`S3Provider` implements receipt-bearing reads (`ReadResponseProvider`),
+single-attempt admitted writes (`AdmittedPutProvider`) up to the 5 GiB single
+`PutObject` ceiling (`S3_MAX_SINGLE_PUT_BYTES`), and non-empty UTF-8 delimiter
+listing (`DelimiterListingProvider`).
+
 Licensed under MIT OR Apache-2.0.

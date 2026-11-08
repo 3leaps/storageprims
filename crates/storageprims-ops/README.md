@@ -1,7 +1,7 @@
 # storageprims-ops
 
-Line-oriented operations built on the provider-neutral `storageprims-core`
-contracts.
+Line-oriented operations and bounded single-object relay (`relay::relay_copy`)
+built on the provider-neutral `storageprims-core` contracts.
 
 See the [storageprims repository](https://github.com/3leaps/storageprims) for
 workspace documentation.
