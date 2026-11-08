@@ -1,7 +1,7 @@
 # DDR-0012: Rooted Local Provider and Bounded Lexical Listing
 
 > **Status**: Accepted
-> **Date**: 2026-10-01 (ratified 2026-11-07)
+> **Date**: 2026-11-07
 > **Authors**: entarch, devlead, devrev, secrev
 
 ## Context

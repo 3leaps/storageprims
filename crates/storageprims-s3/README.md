@@ -16,6 +16,9 @@ Supply at most one non-empty root source: either the URI path or
 `S3Provider` implements receipt-bearing reads (`ReadResponseProvider`),
 single-attempt admitted writes (`AdmittedPutProvider`) up to the 5 GiB single
 `PutObject` ceiling (`S3_MAX_SINGLE_PUT_BYTES`), and non-empty UTF-8 delimiter
-listing (`DelimiterListingProvider`).
+listing (`DelimiterListingProvider`). Write operations (`put` and `admit_put`)
+require US-ASCII header field values and case-insensitively unique user
+metadata names; reads surface `Evidence::Unavailable` for user metadata when S3
+reports `x-amz-missing-meta`.
 
 Licensed under MIT OR Apache-2.0.

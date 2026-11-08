@@ -1416,35 +1416,14 @@ impl PreparedPut for S3PreparedPut {
             match send_outcome {
                 Ok(response) => {
                     let recorded_abort = *abort_state.lock().expect("abort state mutex poisoned");
-                    if let Some(abort) = recorded_abort {
-                        return Err(PutFailure::new(
-                            CommitKnowledge::Committed,
-                            body_abort_extension_error(abort, &control),
-                        ));
-                    }
-                    if delivered.load(Ordering::Acquire) != content_length {
-                        return Err(PutFailure::new(
-                            CommitKnowledge::Committed,
-                            ExtensionError::new(
-                                ExtensionErrorKind::Provider,
-                                Some(invalid_response(
-                                    StorageOperation::Put,
-                                    "S3 acknowledged put before reading admitted content_length",
-                                )),
-                            ),
-                        ));
-                    }
-                    if let Some(kind) = check_control(&control) {
-                        return Err(PutFailure::new(
-                            CommitKnowledge::Committed,
-                            ExtensionError::new(kind, None),
-                        ));
-                    }
-                    Ok(PutResult {
-                        path: key,
-                        etag: response.e_tag().map(ToString::to_string),
-                        size: Some(content_length),
-                    })
+                    finalize_prepared_put_ok(
+                        key,
+                        content_length,
+                        response.e_tag().map(ToString::to_string),
+                        recorded_abort,
+                        delivered.load(Ordering::Acquire),
+                        &control,
+                    )
                 }
                 Err(sdk_err) => {
                     let recorded_abort = *abort_state.lock().expect("abort state mutex poisoned");
@@ -1833,7 +1812,7 @@ fn is_http_tchar(byte: u8) -> bool {
 fn is_valid_header_value(value: &str) -> bool {
     value
         .bytes()
-        .all(|byte| byte == b'\t' || (0x20..=0x7e).contains(&byte) || byte >= 0x80)
+        .all(|byte| byte == b'\t' || (0x20..=0x7e).contains(&byte))
 }
 
 fn validate_put_headers(
@@ -1845,16 +1824,26 @@ fn validate_put_headers(
             return Err(StorageError::InvalidArgument {
                 operation: Some(StorageOperation::Put),
                 argument: "content_type".to_string(),
-                reason: "content_type contains invalid HTTP header bytes".to_string(),
+                reason: "content_type contains invalid or non-ASCII HTTP header bytes".to_string(),
             });
         }
     }
+    let mut seen_lowercase = std::collections::BTreeSet::new();
     for (key, value) in metadata {
         if key.is_empty() || !key.bytes().all(is_http_tchar) || !is_valid_header_value(value) {
             return Err(StorageError::InvalidArgument {
                 operation: Some(StorageOperation::Put),
                 argument: "metadata".to_string(),
-                reason: "user metadata contains an invalid HTTP header name or value".to_string(),
+                reason: "user metadata contains an invalid or non-ASCII HTTP header name or value"
+                    .to_string(),
+            });
+        }
+        if !seen_lowercase.insert(key.to_ascii_lowercase()) {
+            return Err(StorageError::InvalidArgument {
+                operation: Some(StorageOperation::Put),
+                argument: "metadata".to_string(),
+                reason: "user metadata contains duplicate case-insensitive header names"
+                    .to_string(),
             });
         }
     }
@@ -2599,6 +2588,45 @@ fn body_abort_extension_error(abort: BodyAbort, control: &OperationControl) -> E
             }),
         ),
     }
+}
+
+fn finalize_prepared_put_ok(
+    key: String,
+    content_length: u64,
+    etag: Option<String>,
+    recorded_abort: Option<BodyAbort>,
+    delivered_bytes: u64,
+    control: &OperationControl,
+) -> std::result::Result<PutResult, PutFailure> {
+    if let Some(abort) = recorded_abort {
+        return Err(PutFailure::new(
+            CommitKnowledge::Committed,
+            body_abort_extension_error(abort, control),
+        ));
+    }
+    if delivered_bytes != content_length {
+        return Err(PutFailure::new(
+            CommitKnowledge::Committed,
+            ExtensionError::new(
+                ExtensionErrorKind::Provider,
+                Some(invalid_response(
+                    StorageOperation::Put,
+                    "S3 acknowledged put before reading admitted content_length",
+                )),
+            ),
+        ));
+    }
+    if let Some(kind) = check_control(control) {
+        return Err(PutFailure::new(
+            CommitKnowledge::Committed,
+            ExtensionError::new(kind, None),
+        ));
+    }
+    Ok(PutResult {
+        path: key,
+        etag,
+        size: Some(content_length),
+    })
 }
 
 fn classify_prepared_put_error<E>(
@@ -6146,6 +6174,335 @@ mod tests {
         assert!(matches!(
             mm_resp.metadata().user_metadata(),
             Evidence::Unavailable
+        ));
+    }
+
+    #[tokio::test]
+    async fn put_header_validation_and_prepared_put_edge_classifications_are_covered() {
+        use aws_sdk_s3::operation::put_object::PutObjectError;
+
+        let (idle_endpoint, _idle_task) = scripted_response_server(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        let provider = scripted_provider(idle_endpoint).await;
+
+        // 1. Case-colliding user metadata rejected in both admit_put and legacy put.
+        let colliding_meta = BTreeMap::from([
+            ("Alpha".to_string(), "1".to_string()),
+            ("alpha".to_string(), "2".to_string()),
+        ]);
+        let admit_collide = provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "item.bin",
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: colliding_meta.clone(),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .err()
+            .expect("case-colliding metadata must fail admission");
+        assert_eq!(admit_collide.kind(), ExtensionErrorKind::InvalidRequest);
+        let put_collide = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: colliding_meta,
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("case-colliding metadata must fail legacy put");
+        assert!(matches!(
+            put_collide,
+            StorageError::InvalidArgument { ref argument, .. } if argument == "metadata"
+        ));
+
+        // 2. Empty metadata key rejected in both admit_put and legacy put.
+        let empty_key_meta = BTreeMap::from([("".to_string(), "value".to_string())]);
+        let admit_empty_key = provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "item.bin",
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: empty_key_meta.clone(),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .err()
+            .expect("empty metadata key must fail admission");
+        assert_eq!(admit_empty_key.kind(), ExtensionErrorKind::InvalidRequest);
+        let put_empty_key = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: empty_key_meta,
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("empty metadata key must fail legacy put");
+        assert!(matches!(
+            put_empty_key,
+            StorageError::InvalidArgument { ref argument, .. } if argument == "metadata"
+        ));
+
+        // 3. Non-ASCII (>= 0x80) bytes in content_type and metadata values rejected without echoing caller bytes.
+        let secret_non_ascii_ct = "text/plain; tag=secret-\u{00e9}-ct";
+        let ct_err = provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "item.bin",
+                PutOptions {
+                    content_length: Some(0),
+                    content_type: Some(secret_non_ascii_ct.to_string()),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .err()
+            .expect("non-ASCII content_type must fail admission");
+        assert_eq!(ct_err.kind(), ExtensionErrorKind::InvalidRequest);
+        let ct_rendered = format!("{ct_err} | {ct_err:?}");
+        assert!(!ct_rendered.contains("secret-"));
+
+        let secret_non_ascii_val = "secret-\u{00e9}-meta";
+        let meta_non_ascii_err = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: BTreeMap::from([("k".to_string(), secret_non_ascii_val.to_string())]),
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("non-ASCII metadata value must fail legacy put");
+        let meta_rendered = format!("{meta_non_ascii_err} | {meta_non_ascii_err:?}");
+        assert!(!meta_rendered.contains("secret-"));
+
+        // 4. Legacy put exact 5 GiB boundary: S3_MAX_SINGLE_PUT_BYTES passes the ceiling check
+        // (reaching precondition.match validation), while S3_MAX_SINGLE_PUT_BYTES + 1 fails on content_length.
+        let at_limit = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(S3_MAX_SINGLE_PUT_BYTES),
+                    precondition: PutPrecondition::Match {
+                        token: "not-a-valid-etag".to_string(),
+                    },
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("invalid match token must fail after passing 5 GiB check");
+        assert!(matches!(
+            at_limit,
+            StorageError::InvalidArgument { ref argument, .. } if argument == "precondition.match"
+        ));
+        let over_limit = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(S3_MAX_SINGLE_PUT_BYTES + 1),
+                    precondition: PutPrecondition::Match {
+                        token: "not-a-valid-etag".to_string(),
+                    },
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("5 GiB + 1 must fail on content_length");
+        assert!(matches!(
+            over_limit,
+            StorageError::InvalidArgument { ref argument, .. } if argument == "content_length"
+        ));
+
+        // 5. classify_prepared_put_error: ConstructionFailure -> NotStarted, 408 -> Unknown.
+        let control = active_control(Duration::from_secs(5));
+        let construction_failure = classify_prepared_put_error::<PutObjectError>(
+            Some("item.bin"),
+            Some("bucket"),
+            PutPreconditionKind::None,
+            None,
+            &control,
+            aws_sdk_s3::error::SdkError::construction_failure(std::io::Error::other(
+                "sensitive-header-token",
+            )),
+        );
+        assert_eq!(construction_failure.commit(), CommitKnowledge::NotStarted);
+        assert_eq!(
+            construction_failure.error().kind(),
+            ExtensionErrorKind::InvalidRequest
+        );
+        let cf_rendered = format!("{construction_failure:?}");
+        assert!(!cf_rendered.contains("sensitive-header-token"));
+
+        let timeout_408 = classify_prepared_put_error(
+            Some("item.bin"),
+            Some("bucket"),
+            PutPreconditionKind::None,
+            None,
+            &control,
+            aws_sdk_s3::error::SdkError::service_error(
+                PutObjectError::generic(ErrorMetadata::builder().code("RequestTimeout").build()),
+                Response::new(
+                    StatusCode::try_from(408).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+        assert_eq!(timeout_408.commit(), CommitKnowledge::Unknown);
+
+        // 6. finalize_prepared_put_ok + scripted early 200 OK before reading admitted content_length.
+        let ack_after_abort = finalize_prepared_put_ok(
+            "item.bin".to_string(),
+            4,
+            Some("\"e1\"".to_string()),
+            Some(BodyAbort::OverlongStream),
+            4,
+            &control,
+        )
+        .expect_err("recorded abort after 200 ack must report Committed failure");
+        assert_eq!(ack_after_abort.commit(), CommitKnowledge::Committed);
+        assert_eq!(
+            ack_after_abort.error().kind(),
+            ExtensionErrorKind::InvalidRequest
+        );
+
+        let early_ack_unit = finalize_prepared_put_ok(
+            "item.bin".to_string(),
+            8,
+            Some("\"e2\"".to_string()),
+            None,
+            3,
+            &control,
+        )
+        .expect_err("short delivered count after 200 ack must report Committed failure");
+        assert_eq!(early_ack_unit.commit(), CommitKnowledge::Committed);
+        assert_eq!(early_ack_unit.error().kind(), ExtensionErrorKind::Provider);
+
+        struct StalledAfterPrefix {
+            prefix: &'static [u8],
+            emitted: bool,
+        }
+        impl AsyncRead for StalledAfterPrefix {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                buf: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                if !self.emitted {
+                    self.emitted = true;
+                    buf.put_slice(self.prefix);
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let early_server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.expect("accept");
+            let mut hdr = [0_u8; 1024];
+            let _ = sock.read(&mut hdr).await;
+            let _ = sock
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nETag: \"early\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            let _ = sock.shutdown().await;
+        });
+        let early_provider = scripted_provider(format!("http://{addr}")).await;
+        let prepared_early = early_provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "early.bin",
+                PutOptions {
+                    content_length: Some(16),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .expect("admitted");
+        let early_wire_err = prepared_early
+            .execute(
+                Box::new(StalledAfterPrefix {
+                    prefix: b"abcd",
+                    emitted: false,
+                }),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("early 200 before full body must fail");
+        assert_eq!(early_wire_err.commit(), CommitKnowledge::Committed);
+        assert_eq!(early_wire_err.error().kind(), ExtensionErrorKind::Provider);
+        early_server.await.expect("early server joins");
+
+        // 7. read_response(Current): 405 with x-amz-delete-marker: true -> NotFound; 405 without delete marker -> Other.
+        const DELETE_MARKER_405: &str = concat!(
+            "HTTP/1.1 405 Method Not Allowed\r\n",
+            "x-amz-delete-marker: true\r\n",
+            "Content-Length: 0\r\n",
+            "Connection: close\r\n",
+            "\r\n"
+        );
+        const PLAIN_405: &str = concat!(
+            "HTTP/1.1 405 Method Not Allowed\r\n",
+            "Content-Length: 0\r\n",
+            "Connection: close\r\n",
+            "\r\n"
+        );
+        let (dm_endpoint, _dm_task) = scripted_owned_responses_server(vec![
+            DELETE_MARKER_405.to_string(),
+            PLAIN_405.to_string(),
+        ])
+        .await;
+        let dm_provider = scripted_provider(dm_endpoint).await;
+        let dm_err = dm_provider
+            .read_responses()
+            .unwrap()
+            .read_response(
+                ReadRequest::Current("deleted.txt".to_string()),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("405 delete marker must fail");
+        assert!(matches!(
+            dm_err.cause(),
+            Some(StorageError::NotFound { ref path, .. }) if path == "deleted.txt"
+        ));
+
+        let plain_405_err = dm_provider
+            .read_responses()
+            .unwrap()
+            .read_response(
+                ReadRequest::Current("method.txt".to_string()),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("plain 405 must fail");
+        assert!(matches!(
+            plain_405_err.cause(),
+            Some(StorageError::Other { .. })
         ));
     }
 }

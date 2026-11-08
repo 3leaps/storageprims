@@ -1,6 +1,6 @@
 # DDR-0011: Bounded One-Object Relay
 
-> **Status**: Proposed
+> **Status**: Accepted
 > **Date**: 2026-10-01
 > **Authors**: entarch, devlead, devrev, secrev
 

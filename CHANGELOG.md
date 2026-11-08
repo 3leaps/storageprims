@@ -11,6 +11,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- Add `storageprims-local`, a rooted local filesystem provider with
+  handle-relative no-follow containment, atomic overwrite and create-only
+  conditional writes, bounded lexical flat and `"/"` delimiter listing, and
+  receipt/admitted-write hooks.
+- Add optional Rust `ReadResponseProvider` and `AdmittedPutProvider` extension
+  traits, `OperationControl` cancellation and deadline hooks, and
+  `storageprims-ops::relay::relay_copy` for bounded single-object streaming
+  transfer with truthful `CommitKnowledge`.
+- Extend `S3Provider` with `ReadResponseProvider` (reporting
+  `Evidence::Unavailable` when `x-amz-missing-meta` is nonzero),
+  `AdmittedPutProvider` (`max_attempts = 1` and final-fragment withholding),
+  and `DelimiterListingProvider::supports_delimiter`.
+- Enforce the 5 GiB single-`PutObject` ceiling (`S3_MAX_SINGLE_PUT_BYTES`),
+  US-ASCII header field values, and case-insensitively unique user metadata
+  names across S3 `put` and `admit_put`; omit empty S3 metadata maps, reject
+  empty and slash-only S3 keys (`"/"`), and project caller-relative keys
+  (omitting `root_prefix`) in S3 errors and `CopyResult`.
+
 ## [0.1.2] - 2026-09-28
 
 - Add guarded crates.io publication tooling and package checks for the Rust

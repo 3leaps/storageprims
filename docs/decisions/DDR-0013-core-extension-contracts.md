@@ -1,6 +1,6 @@
 # DDR-0013: Receipt-Bearing Reads and Admitted Writes
 
-> **Status**: Proposed
+> **Status**: Accepted
 > **Date**: 2026-10-01
 > **Authors**: entarch, devlead, devrev, secrev
 
