@@ -595,6 +595,20 @@ impl StagedPut {
                     },
                 ))
             }
+            Err(err)
+                if matches!(err, Errno::NOSYS | Errno::INVAL | Errno::NOTSUP)
+                    || err == Errno::OPNOTSUPP =>
+            {
+                Err((
+                    CommitKnowledge::NotCommitted,
+                    StorageError::ProviderUnavailable {
+                        provider: ProviderKind::Local,
+                        operation,
+                        detail: "atomic create-only rename is unavailable on this filesystem"
+                            .into(),
+                    },
+                ))
+            }
             Err(error) => Err(self.classify_rename_failure(error, key, operation)),
         }
     }

@@ -93,7 +93,7 @@ entries by another actor.
   - create-only (`PutPrecondition::MustNotExist`) uses an atomic single-winner
     no-replace rename on the opened parent handle (`renameatx_np(RENAME_EXCL)` on
     macOS, `renameat2(RENAME_NOREPLACE)` on Linux, handle-relative
-    `SetFileInformationByHandle` with `ReplaceIfExists = false` on Windows), mapping
+    `NtSetInformationFile` with `ReplaceIfExists = false` on Windows), mapping
     destination collision to `StorageError::Conflict` with
     `ConflictKind::AlreadyExists` (checking existence before replacing is never an
     acceptable fallback);
@@ -115,8 +115,10 @@ entries by another actor.
   flush), making no stronger cross-platform post-rename directory-journal crash
   promise. Once atomic publication succeeds, any subsequent contracted post-rename
   step failure (such as Unix parent-directory `fsync`) or late `OperationControl`
-  expiry/cancellation reports `CommitKnowledge::Committed`—never masquerading as
-  rollback or deleting the published destination.
+  expiry/cancellation reports `CommitKnowledge::Committed` on admitted writes
+  (while plain `StorageProvider::put` returns the `Io` error with the renamed
+  destination already visible)—never masquerading as rollback or deleting the
+  published destination.
 - **Reserved internal temporary namespace**: Segment names matching `.storageprims-tmp`
   (or `.storageprims-tmp*`) under supported native name equality—including ASCII and
   Unicode simple case folding, trailing dots/spaces, and Windows 8.3 short-name

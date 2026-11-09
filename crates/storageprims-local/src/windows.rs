@@ -25,7 +25,8 @@ use windows_sys::{
     Wdk::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
-            FileIdBothDirectoryInformation, NtCreateFile, NtQueryDirectoryFile, FILE_CREATE,
+            FileIdBothDirectoryInformation, FileRenameInformation, FileRenameInformationEx,
+            NtCreateFile, NtQueryDirectoryFile, NtSetInformationFile, FILE_CREATE,
             FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
             FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT,
         },
@@ -44,12 +45,11 @@ use windows_sys::{
         Storage::FileSystem::{
             CreateFileW, FileAttributeTagInfo, FileBasicInfo, FileDispositionInfo,
             FileDispositionInfoEx, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
-            FileIdInfo, FileRenameInfo, FileRenameInfoEx, FileStandardInfo, FlushFileBuffers,
-            GetFileInformationByHandleEx, GetFileType, GetFinalPathNameByHandleW,
-            SetFileInformationByHandle, DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY,
-            FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
-            FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_BASIC_INFO,
-            FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+            FileIdInfo, FileStandardInfo, FlushFileBuffers, GetFileInformationByHandleEx,
+            GetFileType, GetFinalPathNameByHandleW, SetFileInformationByHandle, DELETE,
+            FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY,
+            FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
+            FILE_BASIC_INFO, FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
             FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX, FILE_FLAG_BACKUP_SEMANTICS,
             FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
             FILE_ID_BOTH_DIR_INFO, FILE_ID_INFO, FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED,
@@ -818,20 +818,22 @@ fn set_rename_info(
         std::ptr::copy_nonoverlapping(wide_leaf.as_ptr(), dst, wide_leaf.len());
     }
     let class = if use_ex {
-        FileRenameInfoEx
+        FileRenameInformationEx
     } else {
-        FileRenameInfo
+        FileRenameInformation
     };
-    let ok = unsafe {
-        SetFileInformationByHandle(
+    let mut iosb: IO_STATUS_BLOCK = unsafe { zeroed() };
+    let status = unsafe {
+        NtSetInformationFile(
             file_handle,
-            class,
+            &mut iosb,
             info_ptr.cast::<c_void>(),
             total_bytes as u32,
+            class,
         )
     };
-    if ok == 0 {
-        Err(unsafe { GetLastError() })
+    if status < 0 {
+        Err(unsafe { RtlNtStatusToDosError(status) })
     } else {
         Ok(())
     }
