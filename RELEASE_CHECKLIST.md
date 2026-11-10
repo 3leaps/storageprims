@@ -93,7 +93,14 @@ subsequent maintainer ceremony. Partial configuration fails closed.
   text before the local tag ceremony. Select the tag before loading an optional
   per-cut environment script; neither route requires a new env-file convention.
 
-- [ ] From a clean, freshly fetched `main`, run `make release-preflight`
+- [ ] From a clean, freshly fetched `main`, run `make release-preflight`. It
+      starts with `make release-github-preflight`, which reads the repository
+      settings (needs repository administration read access) and stops unless
+      the default `GITHUB_TOKEN` is read-only, Actions cannot approve pull
+      requests, the `Tag Publish Protection` ruleset is active on
+      `refs/tags/v*`, and immutable releases are enabled. A published release
+      is then final: assets cannot be added or replaced, so the draft must be
+      complete and verified before publishing
 
 The preflight requires a clean tree, the full `make pr-final` gate, exact
 release-note extraction, a successful fetch, and exact equality between

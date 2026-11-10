@@ -18,7 +18,7 @@
 .PHONY: build-release build-ffi cbindgen pr-final
 .PHONY: install uninstall install-test
 .PHONY: version-patch version-minor version-major version-set version-sync version-check
-.PHONY: release-check release-preflight release-tooling-test release-guard-tag-version release-fetch release-draft
+.PHONY: release-check release-preflight release-github-preflight release-tooling-test release-guard-tag-version release-fetch release-draft
 .PHONY: release-clean release-verify-draft release-resume release-notes release-checksums release-sign
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
@@ -582,11 +582,16 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-github-state.test.sh
 	@./scripts/release-safety.test.sh
 	@./scripts/release-workflow-policy.test.sh
+	@./scripts/release-github-preflight.test.sh
 	@./scripts/release-negative-controls.test.sh
 	@echo "[ok] Release tooling tests passed"
 
+release-github-preflight: ## Verify GitHub token defaults, tag ruleset, and immutable releases
+	@./scripts/release-github-preflight.sh
+
 release-preflight: ## Verify clean-tree pre-tag requirements
 	@./scripts/validate-release-anchors.sh
+	@./scripts/release-github-preflight.sh
 	@./scripts/release-inspect-tag-ruleset.sh "v$(VERSION)"
 	@echo "Running release preflight checks..."
 	@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
