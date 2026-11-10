@@ -18,7 +18,7 @@
 .PHONY: build-release build-ffi cbindgen pr-final
 .PHONY: install uninstall install-test
 .PHONY: version-patch version-minor version-major version-set version-sync version-check
-.PHONY: release-check release-preflight release-tooling-test release-guard-tag-version
+.PHONY: release-check release-preflight release-tooling-test release-guard-tag-version release-fetch release-draft
 .PHONY: release-clean release-download release-notes release-checksums release-sign
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
@@ -565,6 +565,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-restore-tag-ref.test.sh
 	@./scripts/export-release-keys.test.sh
 	@./scripts/release-create-draft.test.sh
+	@./scripts/release-fetch-ci-artifacts.test.sh
 	@./scripts/release-decernor.test.sh
 	@./scripts/release-pin-precursors.test.sh
 	@./scripts/release-tag-controls.test.sh
@@ -635,7 +636,13 @@ release-insert-anchors: release-validate-pin ## Maintainer-only: validate pin, t
 release-clean: ## Safely empty the repository release staging directory
 	@./scripts/release-clean.sh "$(RELEASE_DIR)"
 
-release-download: ## Download exact unsigned assets from the trusted draft
+release-fetch: ## Stage exact unsigned artifacts from the verified tag workflow run
+	@./scripts/release-fetch-ci-artifacts.sh "$(RELEASE_DIR)"
+
+release-draft: ## Create a new unsigned draft from the staged artifacts (create-only)
+	@./scripts/release-create-draft.sh
+
+release-download: ## Recovery: download exact unsigned assets from an existing draft
 	@./scripts/download-release-assets.sh "$(RELEASE_DIR)"
 
 release-notes: ## Add the exact per-cut notes to the signable asset set
@@ -677,7 +684,8 @@ release-upload: ## Verify once and update the exact trusted draft release
 release: release-guard-tag-version ## Run the serialized local signing ceremony
 	@STORAGEPRIMS_REQUIRE_TAG=1 ./scripts/release-guard-tag-version.sh >/dev/null
 	@$(MAKE) release-clean
-	@$(MAKE) release-download
+	@$(MAKE) release-fetch
+	@$(MAKE) release-draft
 	@$(MAKE) release-notes
 	@$(MAKE) release-checksums
 	@$(MAKE) release-sign

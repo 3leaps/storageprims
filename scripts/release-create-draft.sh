@@ -1,28 +1,48 @@
 #!/usr/bin/env bash
-# Create a new unsigned draft only; never update an existing release or asset.
+# Maintainer-only: create a new unsigned draft from the staged CI artifacts.
+# Never update an existing release or asset.
 set -euo pipefail
 
 main() {
-	local tag commit
+	local tag commit object root record
 	local directory=dist/release response id notes name asset
 	source scripts/release-common.sh
+	# Annotated, local object equals origin's, and tag, HEAD and origin/main
+	# are one commit.
+	require_release_guard 1 >/dev/null
 	tag="$(release_tag)"
-	commit="${STORAGEPRIMS_EXPECTED_COMMIT:-}"
-	[[ "$commit" =~ ^[0-9a-f]{40}$ && "$(git rev-parse HEAD)" == "$commit" ]] || {
-		echo 'error: draft commit differs from validated tag target' >&2
-		exit 1
-	}
+	root="$(release_repo_root)"
 	[[ -z "${GH_REPO+x}" ]] || {
 		echo 'error: GH_REPO must be unset' >&2
 		exit 1
 	}
-	[[ "${STORAGEPRIMS_EXPECTED_TAG_OBJECT:-}" =~ ^[0-9a-f]{40}$ ]] || {
-		echo 'error: validated annotated tag object is required' >&2
+	object="$(git rev-parse "refs/tags/$tag")"
+	commit="$(git rev-parse "refs/tags/$tag^{commit}")"
+	# The staged set must come from the fetch for this same tag object.
+	record="$root/$directory.identity"
+	[[ -f "$record" && ! -L "$record" ]] || {
+		echo 'error: staged artifact record is absent; run make release-fetch' >&2
 		exit 1
 	}
-	# Repeat the remote/local tag-object binding immediately before creation.
-	./scripts/release-restore-tag-ref.sh
+	[[ "$(awk -F= '$1=="tag" {print $2}' "$record")" == "$tag" &&
+	"$(awk -F= '$1=="object" {print $2}' "$record")" == "$object" &&
+	"$(awk -F= '$1=="commit" {print $2}' "$record")" == "$commit" ]] || {
+		echo 'error: staged artifacts were fetched for another tag object' >&2
+		exit 1
+	}
 	./scripts/validate-release-assets.sh "$directory" base
+	# A 404 is the only absence proof; transport or auth failures are not.
+	if gh api "repos/3leaps/storageprims/releases/tags/$tag" >/dev/null 2>"$root/$directory.draft-error"; then
+		rm -f "$root/$directory.draft-error"
+		echo 'error: a release for this tag already exists' >&2
+		exit 1
+	fi
+	grep -q 'HTTP 404' "$root/$directory.draft-error" || {
+		rm -f "$root/$directory.draft-error"
+		echo 'error: release absence is unknown' >&2
+		exit 1
+	}
+	rm -f "$root/$directory.draft-error"
 	notes="docs/releases/$tag.md"
 	[[ -s "$notes" && ! -L "$notes" ]] || {
 		echo 'error: tagged release notes are absent' >&2
@@ -65,6 +85,7 @@ main() {
 			exit 1
 		}
 	done < <(release_base_assets)
+	assert_github_release_state release_base_assets
 	echo '[ok] create-only unsigned draft assets uploaded'
 }
 
