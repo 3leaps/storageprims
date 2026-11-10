@@ -17,7 +17,9 @@ stop() {
 [[ "$STORAGEPRIMS_GPG_HOMEDIR" == /* && -d "$STORAGEPRIMS_GPG_HOMEDIR" ]] || stop 'approved GPG home must be an absolute directory'
 [[ -f "$STORAGEPRIMS_MINISIGN_PUB" && -s "$STORAGEPRIMS_MINISIGN_PUB" && ! -L "$STORAGEPRIMS_MINISIGN_PUB" ]] ||
 	stop 'minisign public export must be a nonempty regular file, not a symlink'
-python3 - "$STORAGEPRIMS_GPG_HOMEDIR" "$HOME/.gnupg" "$(git rev-parse --show-toplevel)" <<'PY'
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" && [[ -n "$repo_root" ]] ||
+	stop 'repository root is unavailable'
+python3 - "$STORAGEPRIMS_GPG_HOMEDIR" "$HOME/.gnupg" "$repo_root" <<'PY'
 from pathlib import Path
 import sys
 

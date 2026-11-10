@@ -8,6 +8,8 @@ mkdir -p "$fixture/repo/scripts" "$fixture/repo/docs" "$fixture/home" "$fixture/
 chmod 700 "$fixture/home" "$fixture/other-home" "$fixture/other-home/.gnupg"
 cp "$root/Makefile" "$root/VERSION" "$fixture/repo/"
 cp "$root/scripts/"{release-decernor.sh,release-export-pin.sh,release-validate-pin.sh,release-insert-anchors.sh} "$fixture/repo/scripts/"
+# The ceremony runs inside the repository; the fixture is one too.
+git -C "$fixture/repo" init -q
 bin="${STORAGEPRIMS_DECERNOR_BIN:-$(command -v decernor)}"
 export STORAGEPRIMS_DECERNOR_BIN="$bin"
 python3 - "$fixture/public.pub" "$fixture/private.pub" <<'PY'

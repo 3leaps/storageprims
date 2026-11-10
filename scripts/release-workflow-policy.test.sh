@@ -166,6 +166,22 @@ refused 'docker run image is not digest-pinned' "$(base "    steps:
       - run: docker run --label-file $image alpine:latest")"
 refused 'docker run image is not digest-pinned' "$(base "    steps:
       - run: docker run --rm $image printf x#y; docker run --rm alpine:latest true")"
+# Live devrev forms: global options, the container group, create, other tools.
+for form in 'docker container run --rm ubuntu:latest true' \
+	'docker --context x run --rm ubuntu:latest true' \
+	'docker -H unix:///var/run/docker.sock run ubuntu:latest true' \
+	'docker create ubuntu:latest' 'podman run --rm ubuntu:latest true' \
+	'/usr/bin/docker run ubuntu:latest' 'docker --unknown-global x run ubuntu:latest' \
+	'docker pull ubuntu:latest' 'docker build -t x .'; do
+	refused 'docker run image is not digest-pinned' "$(base "    steps:
+      - run: $form")"
+done
+# Image-free subcommands and compose stay accepted.
+base "    steps:
+      - run: docker compose -f docker-compose.localstack.yml up -d localstack
+      - run: docker container run --rm $image true
+      - run: docker ps" >"$scratch/compose.yml"
+python3 -I "$policy" "$scratch/compose.yml"
 # A comment line or a release download URL is not a release command.
 base "    steps:
       - run: |

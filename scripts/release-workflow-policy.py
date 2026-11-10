@@ -22,6 +22,11 @@ Rules:
   digest on the image argument itself.
 
 Action identity is compared case-insensitively, as GitHub resolves it.
+
+The read-only job token is the release boundary. The run-script checks are a
+guardrail against regressions, not a shell parser: quoting or variable
+indirection can always defeat a text linter. Compose files referenced by
+`docker compose` are outside these rules.
 """
 
 import json
@@ -107,40 +112,76 @@ def check_image(where, image, errors):
         errors.append(f"{where}: image {image!r} is not digest-pinned")
 
 
-def docker_images(line):
-    """The image argument of every `docker run` on a command line.
+CONTAINER_TOOLS = {"docker", "podman", "nerdctl"}
+# Global options before the subcommand, with and without a separate value.
+CONTAINER_GLOBAL_VALUE_OPTIONS = {
+    "-H", "--host", "-c", "--context", "--config", "-l", "--log-level",
+    "--tlscacert", "--tlscert", "--tlskey",
+}
+CONTAINER_GLOBAL_BOOL_OPTIONS = {"-D", "--debug", "--tls", "--tlsverify"}
+# Subcommands that start a container from an image argument.
+IMAGE_SUBCOMMANDS = {"run", "create"}
+# Subcommands that take no image argument.
+NO_IMAGE_SUBCOMMANDS = {
+    "compose", "ps", "logs", "stop", "start", "rm", "inspect", "version",
+    "info", "exec", "kill", "wait", "cp",
+}
 
-    None stands for an invocation whose image cannot be identified (an
-    unsupported option form or a parse failure); callers refuse it.
+
+def shell_words(line):
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|()")
+    lexer.whitespace_split = True
+    # Bash does not start a comment inside a word (x#y); never let shlex
+    # hide later text as a comment. A real trailing comment is inspected
+    # too, which can only refuse more.
+    lexer.commenters = ""
+    return list(lexer)
+
+
+def run_image(words, j):
+    """The image argument of a run/create option list starting at j, or None."""
+    while j < len(words):
+        word = words[j]
+        if word in DOCKER_VALUE_OPTIONS:
+            j += 2
+        elif word in DOCKER_BOOL_OPTIONS or (word.startswith("--") and "=" in word):
+            j += 1
+        elif word.startswith("-"):
+            return None
+        else:
+            return word
+    return None
+
+
+def container_images(line):
+    """Image arguments of every container-tool invocation on a command line.
+
+    None stands for an invocation whose image cannot be identified or whose
+    subcommand is not known to be image-free; callers refuse it.
     """
     try:
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|()")
-        lexer.whitespace_split = True
-        # Bash does not start a comment inside a word (x#y); never let shlex
-        # hide later text as a comment. A real trailing comment is inspected
-        # too, which can only refuse more.
-        lexer.commenters = ""
-        words = list(lexer)
+        words = shell_words(line)
     except ValueError:
         return [None]
     images = []
-    for i in range(len(words) - 1):
-        if words[i] != "docker" or words[i + 1] != "run":
+    for i, word in enumerate(words):
+        if word.rsplit("/", 1)[-1] not in CONTAINER_TOOLS:
             continue
-        image = None
-        j = i + 2
-        while j < len(words):
-            word = words[j]
-            if word in DOCKER_VALUE_OPTIONS:
+        j = i + 1
+        while j < len(words) and words[j].startswith("-"):
+            if words[j] in CONTAINER_GLOBAL_VALUE_OPTIONS:
                 j += 2
-            elif word in DOCKER_BOOL_OPTIONS or (word.startswith("--") and "=" in word):
+            elif words[j] in CONTAINER_GLOBAL_BOOL_OPTIONS or (words[j].startswith("--") and "=" in words[j]):
                 j += 1
-            elif word.startswith("-"):
-                break
             else:
-                image = word
                 break
-        images.append(image)
+        if j < len(words) and words[j] == "container":
+            j += 1
+        sub = words[j] if j < len(words) else None
+        if sub in IMAGE_SUBCOMMANDS:
+            images.append(run_image(words, j + 1))
+        elif sub not in NO_IMAGE_SUBCOMMANDS:
+            images.append(None)
     return images
 
 
@@ -225,9 +266,9 @@ def check(path):
             for line in commands(run):
                 if FORBIDDEN_RUN.search(line) or (GH_API.search(line) and GH_API_WRITE.search(line)):
                     errors.append(f"{step_where}: forbidden release or publish command: {line}")
-                if re.search(r"\bdocker\s+run\b", line):
-                    images = docker_images(line)
-                    if not images or any(image is None or not DIGEST_IMAGE.match(image) for image in images):
+                if re.search(r"\b(docker|podman|nerdctl)\b", line):
+                    images = container_images(line)
+                    if any(image is None or not DIGEST_IMAGE.match(image) for image in images):
                         errors.append(f"{step_where}: docker run image is not digest-pinned: {line}")
     return errors
 

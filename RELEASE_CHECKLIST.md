@@ -12,6 +12,10 @@ first cut using this gate.
 
 - `make bootstrap` and `make tools` are green
 - `gh`, minisign, and optional GPG tooling are available
+- `make release-tooling-test` and the ceremony also need bash, `jq`, `rg`,
+  `curl`, `python3` (3.11+), `cargo`, gpg, minisign, a Decernor v0.1.8+ binary
+  (`STORAGEPRIMS_DECERNOR_BIN` or `PATH`), and mikefarah `yq` v4 (Debian's
+  `apt` package named `yq` is a different tool)
 - `gh` is authenticated for `3leaps/storageprims`
 - Approved signing material is loaded from an external secret store without
   printing values or paths
