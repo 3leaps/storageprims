@@ -1,5 +1,13 @@
-# Build an unsigned, exact release asset set and open a draft GitHub release.
-# Signing keys remain local to the maintainer MFA ceremony.
+# storageprims read-only release artifacts
+#
+# On a v* tag: restore and verify the signed annotated tag against the public
+# pin committed in the tagged commit, then build the native FFI archives and
+# the SBOM and keep them as workflow artifacts.
+#
+# This workflow holds no signing, release or registry authority. A green run is
+# a consistency signal, not release authorization. The maintainer verifies the
+# tag independently, binds it to main, creates the draft locally from these
+# artifacts, signs the manifests and publishes.
 name: Release
 on:
   push:
@@ -14,7 +22,7 @@ env:
 jobs:
   validate:
     name: Validate tag and package set
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       commit: ${{ steps.release.outputs.commit }}
       version: ${{ steps.release.outputs.version }}
@@ -24,47 +32,61 @@ jobs:
         shell: bash
     steps:
       - name: Checkout exact tag
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
-          # The strict tag guard fetches origin/main in this read-only job.
-          persist-credentials: true
+          persist-credentials: false
       - name: Install Rust 1.94.1
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
           toolchain: 1.94.1
-      - name: Bind annotated tag to main
+      - name: Restore annotated tag and check VERSION
         id: release
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
-          STORAGEPRIMS_REQUIRE_TAG: '1'
         run: |
           set -euo pipefail
           ./scripts/release-restore-tag-ref.sh
           ./scripts/release-guard-tag-version.sh
+          tag_object="$(git rev-parse "refs/tags/$STORAGEPRIMS_RELEASE_TAG")"
+          commit="$(git rev-parse "refs/tags/$STORAGEPRIMS_RELEASE_TAG^{}")"
           {
-            printf 'tag_object=%s\n' "$(git rev-parse "refs/tags/$STORAGEPRIMS_RELEASE_TAG")"
-            printf 'commit=%s\n' "$(git rev-parse HEAD)"
-            printf 'version=%s\n' "$(cat VERSION)"
+            printf 'tag_object=%s\n' "$tag_object"
+            printf 'commit=%s\n' "$commit"
+            printf 'version=%s\n' "$(tr -d ' \t\r\n' < VERSION)"
           } >>"$GITHUB_OUTPUT"
+          printf '{"tag":"%s","object":"%s","commit":"%s"}\n' \
+            "$STORAGEPRIMS_RELEASE_TAG" "$tag_object" "$commit" >release-identity.json
+      - name: Upload artifact identity and licenses
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: release-identity
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            release-identity.json
+            LICENSE-MIT
+            LICENSE-APACHE
       - name: Verify package archives without publishing
         run: make release-check
   verify-signature:
     name: Verify pinned tag signature
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
     steps:
       - name: Checkout exact signed tag and committed pin
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify committed pin and GitHub signature
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
           STORAGEPRIMS_EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
         run: |
@@ -85,7 +107,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             platform: linux-amd64
             shared: libstorageprims_ffi.so
@@ -105,10 +127,21 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ needs.validate.outputs.commit }}
+      - name: Confirm annotated tag identity
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+          STORAGEPRIMS_EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          ./scripts/release-restore-tag-ref.sh
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
       - name: Install Rust 1.94.1
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
@@ -138,24 +171,36 @@ jobs:
           # shellcheck disable=SC2031
           validate_ffi_archive "$archive"
       - name: Upload FFI archive
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: ffi-${{ matrix.platform }}
           path: storageprims-ffi-${{ needs.validate.outputs.version }}-${{ matrix.platform }}.tar.gz
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
   sbom:
     name: CycloneDX SBOM
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+          ref: ${{ needs.validate.outputs.commit }}
+      - name: Confirm annotated tag identity
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
+          STORAGEPRIMS_EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          ./scripts/release-restore-tag-ref.sh
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
       - name: Generate SBOM with pinned Syft image
         run: |
           set -euo pipefail
@@ -167,74 +212,9 @@ jobs:
             --output "cyclonedx-json=sbom-${{ needs.validate.outputs.version }}.cdx.json"
           test -s "sbom-${{ needs.validate.outputs.version }}.cdx.json"
       - name: Upload SBOM
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: sbom
           path: sbom-${{ needs.validate.outputs.version }}.cdx.json
           if-no-files-found: error
-          retention-days: 7
-  draft:
-    name: Create exact unsigned draft
-    needs: [validate, verify-signature, build-ffi, sbom]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Download FFI archives
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
-        with:
-          pattern: ffi-*
-          path: dist/release
-          merge-multiple: true
-      - name: Download SBOM
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
-        with:
-          name: sbom
-          path: dist/release
-      - name: Assert exact unsigned inventory
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
-          STORAGEPRIMS_EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
-          STORAGEPRIMS_REQUIRE_TAG: '1'
-        run: |
-          set -euo pipefail
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
-          git config --local http.https://github.com/.extraheader "$auth_header"
-          cleanup_credentials() {
-            git config --local --unset-all http.https://github.com/.extraheader || true
-          }
-          trap cleanup_credentials EXIT
-          ./scripts/release-restore-tag-ref.sh
-          ./scripts/release-guard-tag-version.sh
-          cleanup_credentials
-          trap - EXIT
-          cp LICENSE-MIT LICENSE-APACHE dist/release/
-          ./scripts/validate-release-assets.sh dist/release base
-      - name: Refuse unsafe existing release state
-        env:
-          GH_TOKEN: ${{ github.token }}
-          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
-        run: ./scripts/check-draft-release.sh before
-      - name: Create new unsigned draft with exact assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
-          STORAGEPRIMS_EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
-          STORAGEPRIMS_EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
-        run: |
-          set -euo pipefail
-          ./scripts/release-create-draft.sh
-      - name: Verify exact draft state and remote inventory
-        env:
-          GH_TOKEN: ${{ github.token }}
-          STORAGEPRIMS_RELEASE_TAG: ${{ github.ref_name }}
-        run: ./scripts/check-draft-release.sh after
+          retention-days: 30
