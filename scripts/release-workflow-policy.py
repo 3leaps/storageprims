@@ -116,6 +116,10 @@ def docker_images(line):
     try:
         lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|()")
         lexer.whitespace_split = True
+        # Bash does not start a comment inside a word (x#y); never let shlex
+        # hide later text as a comment. A real trailing comment is inspected
+        # too, which can only refuse more.
+        lexer.commenters = ""
         words = list(lexer)
     except ValueError:
         return [None]

@@ -164,6 +164,8 @@ refused 'docker run image is not digest-pinned' "$(base "    steps:
       - run: docker run --rm $image true; docker run --rm alpine:latest true")"
 refused 'docker run image is not digest-pinned' "$(base "    steps:
       - run: docker run --label-file $image alpine:latest")"
+refused 'docker run image is not digest-pinned' "$(base "    steps:
+      - run: docker run --rm $image printf x#y; docker run --rm alpine:latest true")"
 # A comment line or a release download URL is not a release command.
 base "    steps:
       - run: |
