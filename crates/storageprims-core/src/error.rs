@@ -116,6 +116,7 @@ pub enum InspectionKind {
 /// Resource dimension responsible for a bounded inspection failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum InspectionLimitDimension {
     PayloadBytes,
     Requests,
@@ -125,10 +126,12 @@ pub enum InspectionLimitDimension {
     ChunkSize,
     ProbeSize,
     Deadline,
+    Entries,
 }
 
 /// Canonical error type for all storageprims operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum StorageError {
     #[error("invalid URI: {uri} - {reason}")]
     InvalidUri { uri: String, reason: String },

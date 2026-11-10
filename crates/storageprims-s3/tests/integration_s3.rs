@@ -3,14 +3,16 @@
 use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use storageprims_core::{
-    BoxedByteStream, Capability, ConflictKind, CopyRequest, CredentialSource, CredentialSourceKind,
-    DelimiterListRequest, GetRangeRequest, ProbeScope, ProviderConfig, ProviderKind, PutOptions,
-    PutPrecondition, StorageError, StorageProvider, TargetConfig,
+    BoxedByteStream, Cancellation, Capability, CommitKnowledge, ConflictKind, CopyRequest,
+    CredentialSource, CredentialSourceKind, DelimiterListRequest, Evidence, GetRangeRequest,
+    GuardedReadProvider, OperationControl, ProbeScope, ProviderConfig, ProviderKind, PutOptions,
+    PutPrecondition, ReadEnforcement, ReadRequest, SourceSelector, StorageError, StorageProvider,
+    TargetConfig, WriteMode,
 };
 use storageprims_s3::S3Provider;
 use tokio::io::AsyncReadExt;
@@ -709,6 +711,108 @@ async fn s3_provider_probe_checks_configured_bucket_against_localstack() {
             Capability::GuardedRead,
         ]
     );
+}
+
+#[tokio::test]
+async fn s3_provider_read_responses_admitted_puts_and_delimiter_discovery_against_localstack() {
+    let test_context = TestContext::new().await;
+    let provider = test_context.provider_with_root("ext-root").await;
+
+    let listing = provider.delimiter_lists().expect("delimiter listing hook");
+    assert!(listing.supports_delimiter("/"));
+    assert!(listing.supports_delimiter(":"));
+    assert!(!listing.supports_delimiter(""));
+
+    let writer = provider.admitted_puts().expect("admitted_puts hook");
+    let mut meta = BTreeMap::new();
+    meta.insert("tier".to_string(), "warm".to_string());
+    let payload = "{\"status\":\"ok\"}";
+    let prepared = writer
+        .admit_put(
+            "items/record.json",
+            PutOptions {
+                content_length: Some(payload.len() as u64),
+                content_type: Some("application/json".to_string()),
+                metadata: meta.clone(),
+                precondition: PutPrecondition::MustNotExist,
+            },
+            WriteMode::SinglePart,
+        )
+        .expect("admit_put succeeds");
+    let put_res = prepared
+        .execute(
+            boxed_reader(payload),
+            OperationControl::new(
+                Instant::now() + Duration::from_secs(15),
+                Cancellation::new(),
+            ),
+        )
+        .await
+        .expect("admitted write executes against LocalStack");
+    assert_eq!(put_res.path, "items/record.json");
+    let etag = put_res.etag.expect("put returns ETag");
+
+    // Duplicate MustNotExist fails with NotCommitted AlreadyExists
+    let dup = writer
+        .admit_put(
+            "items/record.json",
+            PutOptions {
+                content_length: Some(payload.len() as u64),
+                precondition: PutPrecondition::MustNotExist,
+                ..PutOptions::default()
+            },
+            WriteMode::SinglePart,
+        )
+        .expect("admitted")
+        .execute(
+            boxed_reader(payload),
+            OperationControl::new(
+                Instant::now() + Duration::from_secs(15),
+                Cancellation::new(),
+            ),
+        )
+        .await
+        .expect_err("duplicate MustNotExist must fail");
+    assert_eq!(dup.commit(), CommitKnowledge::NotCommitted);
+    assert!(matches!(
+        dup.error().cause(),
+        Some(StorageError::Conflict {
+            kind: ConflictKind::AlreadyExists,
+            ..
+        })
+    ));
+
+    // Guarded read_response returns receipt + metadata from single GET
+    let reader_ext = provider.read_responses().expect("read_responses hook");
+    let selection = provider
+        .bind_guarded_read(
+            "items/record.json",
+            SourceSelector::ValidatorMatch { token: etag },
+        )
+        .expect("bind selection");
+    let resp = reader_ext
+        .read_response(
+            ReadRequest::Guarded(selection),
+            OperationControl::new(
+                Instant::now() + Duration::from_secs(15),
+                Cancellation::new(),
+            ),
+        )
+        .await
+        .expect("guarded read_response succeeds");
+    let (stream, receipt, enforcement, read_meta) = resp.into_parts();
+    assert_eq!(enforcement, ReadEnforcement::ValidatorMatch);
+    assert_eq!(receipt.path, "items/record.json");
+    assert_eq!(receipt.total_size, Some(payload.len() as u64));
+    assert!(matches!(
+        read_meta.content_type(),
+        Evidence::Available(Some(ct)) if ct == "application/json"
+    ));
+    assert!(matches!(
+        read_meta.user_metadata(),
+        Evidence::Available(m) if m == &meta
+    ));
+    assert_eq!(read_stream(stream).await, payload.as_bytes());
 }
 
 struct TestContext {

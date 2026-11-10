@@ -1,3 +1,4 @@
 storageprims-core
 storageprims-s3
+storageprims-local
 storageprims-ops

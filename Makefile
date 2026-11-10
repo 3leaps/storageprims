@@ -13,7 +13,7 @@
 .NOTPARALLEL: release
 
 .PHONY: all help bootstrap bootstrap-foundation bootstrap-rust-tools bootstrap-force
-.PHONY: tools check test test-integration-s3 test-integration-ffi fmt fmt-check lint build clean version
+.PHONY: tools check test test-integration-s3 test-integration-ops test-integration-ffi fmt fmt-check lint build clean version
 .PHONY: precommit prepush deny audit dependency-scan msrv
 .PHONY: build-release build-ffi cbindgen pr-final
 .PHONY: install uninstall install-test
@@ -86,6 +86,7 @@ help: ## Show available targets
 	@echo "  check           Run all quality checks (fmt, lint, test, deny)"
 	@echo "  test            Run test suite"
 	@echo "  test-integration-s3  Run S3 LocalStack integration suite (cargo nextest)"
+	@echo "  test-integration-ops Run ops relay LocalStack integration suite (cargo nextest)"
 	@echo "  test-integration-ffi Run FFI LocalStack integration suite"
 	@echo "  fmt             Format code (cargo fmt + goneat format)"
 	@echo "  lint            Run linting (cargo clippy + goneat lint)"
@@ -327,6 +328,17 @@ test-integration-s3: ## Run S3 LocalStack integration tests
 	$(CARGO) nextest run -p storageprims-s3 --features integration --test integration_s3
 	@echo "[ok] S3 integration tests passed"
 
+test-integration-ops: ## Run ops relay LocalStack integration tests
+	@echo "Running ops relay integration tests against LocalStack..."
+	@if ! cargo nextest --version >/dev/null 2>&1; then \
+		echo "[!!] cargo-nextest not found (run 'make bootstrap' or 'cargo install cargo-nextest --locked --version $(NEXTEST_VERSION)')"; \
+		exit 1; \
+	fi
+	AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+	AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
+	$(CARGO) nextest run -p storageprims-ops --features integration --test integration_relay
+	@echo "[ok] Ops relay integration tests passed"
+
 test-integration-ffi: ## Run FFI LocalStack integration tests
 	@echo "Running FFI integration tests against LocalStack..."
 	$(CARGO) test -p storageprims-ffi --features integration --test integration_ffi -- --nocapture
@@ -411,7 +423,7 @@ dependency-scan: ## Run Goneat dependency policy and vulnerability checks
 prepush: fmt-check lint test deny dependency-scan version-check release-tooling-test ## Pre-push checks (thorough)
 	@echo "[ok] Pre-push checks passed"
 
-pr-final: fmt cbindgen prepush test-integration-s3 test-integration-ffi ## Final PR gate before push/PR update
+pr-final: fmt cbindgen prepush test-integration-s3 test-integration-ops test-integration-ffi ## Final PR gate before push/PR update
 	@echo "[ok] PR final checks passed"
 
 # -----------------------------------------------------------------------------
@@ -520,7 +532,7 @@ p = pathlib.Path('Cargo.toml'); \
 text = p.read_text(); \
 text, n = re.subn(r'(?m)^version = \"[^\"]*\"', 'version = \"%s\"' % ver, text, count=1); \
 assert n == 1, 'failed to update [workspace.package] version'; \
-text = re.sub(r'(storageprims-(?:core|ops|s3|ffi) = \{ version = )\"[^\"]*\"', r'\1\"%s\"' % ver, text); \
+text = re.sub(r'(storageprims-(?:core|local|ops|s3|ffi) = \{ version = )\"[^\"]*\"', r'\1\"%s\"' % ver, text); \
 p.write_text(text); \
 " "$$ver" || exit 1; \
 		echo "[ok] Synced Cargo.toml to $$ver (python fallback)"; \

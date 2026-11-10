@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -22,18 +23,21 @@ use bytes::Bytes;
 use http_body::{Frame, SizeHint};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use storageprims_core::{
-    sanitize_endpoint, BoxFuture, BoxedByteStream, ByteWindow, Capability, ConflictKind,
-    CopyRequest, CopyResult, CopyStrategy, CredentialSource, CredentialSourceKind,
-    DelimiterListRequest, DelimiterListResult, DelimiterListingProvider, GetRangeRequest,
+    sanitize_endpoint, AdmittedPutProvider, BoxFuture, BoxedByteStream, ByteWindow, Capability,
+    CommitKnowledge, ConflictKind, CopyRequest, CopyResult, CopyStrategy, CredentialSource,
+    CredentialSourceKind, DelimiterListRequest, DelimiterListResult, DelimiterListingProvider,
+    Evidence, ExtensionError, ExtensionErrorKind, FutureResult, GetRangeRequest,
     GuardedRangeRequest, GuardedReadProvider, GuardedReadResponse, GuardedReadSelection,
-    ListOptions, ListResult, ObjectMetadata, ObjectSummary, ProbeResult, ProbeScope,
-    ProviderConfig, ProviderKind, PutOptions, PutPrecondition, PutResult, Result,
-    SourceObservation, SourceReceipt, SourceSelector, StorageError, StorageOperation,
-    StorageProvider, StorageUri,
+    ListOptions, ListResult, ObjectMetadata, ObjectSummary, OperationControl, PreparedPut,
+    ProbeResult, ProbeScope, ProviderConfig, ProviderKind, PutFailure, PutOptions, PutPrecondition,
+    PutResult, PutSupport, ReadEnforcement, ReadMetadata, ReadRequest, ReadResponse,
+    ReadResponseProvider, ReadSupport, Result, SourceObservation, SourceReceipt, SourceSelector,
+    StorageError, StorageOperation, StorageProvider, StorageUri, WriteMode,
 };
 use tokio::io::{AsyncRead, ReadBuf};
 
 const S3_DEFAULT_MAX_KEYS: u32 = 1_000;
+const S3_MAX_SINGLE_PUT_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct S3Provider {
@@ -69,10 +73,22 @@ enum PutPreconditionKind {
     Match,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum BodyAbort {
+    ShortStream,
+    OverlongStream,
+    ReadError(std::io::ErrorKind),
+    Control(ExtensionErrorKind),
+}
+
 struct AsyncReadBody {
     reader: Mutex<BoxedByteStream>,
     finished: bool,
     remaining: u64,
+    pending_final: Option<Bytes>,
+    abort_state: Option<Arc<Mutex<Option<BodyAbort>>>>,
+    delivered: Option<Arc<AtomicU64>>,
+    control: Option<OperationControl>,
 }
 
 #[derive(Debug)]
@@ -184,7 +200,7 @@ impl S3Provider {
     }
 
     fn resolve_key(&self, key: &str) -> Result<String> {
-        if key.is_empty() {
+        if key.trim_start_matches('/').is_empty() {
             return Err(StorageError::InvalidArgument {
                 operation: None,
                 argument: "key".to_string(),
@@ -249,9 +265,20 @@ impl S3Provider {
 
     async fn relay_copy(
         &self,
+        request: CopyRequest,
         source: &S3Location,
         destination: &S3Location,
     ) -> Result<CopyResult> {
+        let source_target = if request.source.starts_with("s3://") {
+            source.key.as_str()
+        } else {
+            request.source.as_str()
+        };
+        let destination_target = if request.destination.starts_with("s3://") {
+            destination.key.as_str()
+        } else {
+            request.destination.as_str()
+        };
         let object = self
             .client
             .get_object()
@@ -263,7 +290,7 @@ impl S3Provider {
                 map_sdk_error(
                     ProviderKind::S3,
                     StorageOperation::Get,
-                    Some(&source.key),
+                    Some(source_target),
                     Some(&source.bucket),
                     error,
                 )
@@ -285,15 +312,15 @@ impl S3Provider {
                 map_sdk_error(
                     ProviderKind::S3,
                     StorageOperation::Put,
-                    Some(&destination.key),
+                    Some(destination_target),
                     Some(&destination.bucket),
                     error,
                 )
             })?;
 
         Ok(CopyResult {
-            source: format!("s3://{}/{}", source.bucket, source.key),
-            destination: format!("s3://{}/{}", destination.bucket, destination.key),
+            source: request.source,
+            destination: request.destination,
             strategy: CopyStrategy::Relay,
             bytes_copied: size,
             destination_etag: response.e_tag().map(ToString::to_string),
@@ -323,6 +350,14 @@ impl StorageProvider for S3Provider {
         Some(self)
     }
 
+    fn read_responses(&self) -> Option<&dyn ReadResponseProvider> {
+        Some(self)
+    }
+
+    fn admitted_puts(&self) -> Option<&dyn AdmittedPutProvider> {
+        Some(self)
+    }
+
     fn list(&self, options: ListOptions) -> BoxFuture<'_, ListResult> {
         Box::pin(async move {
             let prefix =
@@ -332,7 +367,7 @@ impl StorageProvider for S3Provider {
                 .client
                 .list_objects_v2()
                 .bucket(&self.bucket)
-                .set_prefix(prefix.clone())
+                .set_prefix(prefix)
                 .set_continuation_token(options.continuation_token)
                 .set_max_keys(max_keys)
                 .send()
@@ -341,7 +376,7 @@ impl StorageProvider for S3Provider {
                     map_sdk_error(
                         ProviderKind::S3,
                         StorageOperation::List,
-                        prefix.as_deref(),
+                        options.prefix.as_deref(),
                         Some(&self.bucket),
                         error,
                     )
@@ -394,7 +429,7 @@ impl StorageProvider for S3Provider {
                     map_sdk_error(
                         ProviderKind::S3,
                         StorageOperation::Head,
-                        Some(&resolved_key),
+                        Some(&key),
                         Some(&self.bucket),
                         error,
                     )
@@ -432,7 +467,7 @@ impl StorageProvider for S3Provider {
                     map_sdk_error(
                         ProviderKind::S3,
                         StorageOperation::Get,
-                        Some(&resolved_key),
+                        Some(&key),
                         Some(&self.bucket),
                         error,
                     )
@@ -475,7 +510,7 @@ impl StorageProvider for S3Provider {
                     map_sdk_error(
                         ProviderKind::S3,
                         StorageOperation::GetRange,
-                        Some(&resolved_key),
+                        Some(&request.key),
                         Some(&self.bucket),
                         error,
                     )
@@ -506,6 +541,14 @@ impl StorageProvider for S3Provider {
                 reason: "S3 uploads require a known content length for streamed request bodies"
                     .to_string(),
             })?;
+            if content_length > S3_MAX_SINGLE_PUT_BYTES {
+                return Err(StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::Put),
+                    argument: "content_length".to_string(),
+                    reason: "content length exceeds the 5 GiB S3 single-PUT limit".to_string(),
+                });
+            }
+            validate_put_headers(content_type.as_deref(), &metadata)?;
             let (if_match, if_none_match, precondition_kind) = match precondition {
                 PutPrecondition::None => (None, None, PutPreconditionKind::None),
                 PutPrecondition::MustNotExist => (
@@ -532,19 +575,14 @@ impl StorageProvider for S3Provider {
                     }
                 })?)
                 .set_content_type(content_type)
-                .set_metadata(Some(metadata.into_iter().collect()))
+                .set_metadata((!metadata.is_empty()).then(|| metadata.into_iter().collect()))
                 .set_if_match(if_match)
                 .set_if_none_match(if_none_match)
                 .body(byte_stream_from_reader(body, content_length))
                 .send()
                 .await
                 .map_err(|error| {
-                    map_put_error(
-                        Some(&resolved_key),
-                        Some(&self.bucket),
-                        precondition_kind,
-                        error,
-                    )
+                    map_put_error(Some(&key), Some(&self.bucket), precondition_kind, error)
                 })?;
 
             Ok(PutResult {
@@ -569,7 +607,7 @@ impl StorageProvider for S3Provider {
                     map_sdk_error(
                         ProviderKind::S3,
                         StorageOperation::Delete,
-                        Some(&resolved_key),
+                        Some(&key),
                         Some(&self.bucket),
                         error,
                     )
@@ -584,6 +622,11 @@ impl StorageProvider for S3Provider {
             let destination = self.resolve_copy_location(&request.destination, "destination")?;
 
             if source.bucket == destination.bucket {
+                let destination_target = if request.destination.starts_with("s3://") {
+                    destination.key.as_str()
+                } else {
+                    request.destination.as_str()
+                };
                 let source_header = encode_copy_source(&source.bucket, &source.key);
                 let response = self
                     .client
@@ -597,7 +640,7 @@ impl StorageProvider for S3Provider {
                         map_sdk_error(
                             ProviderKind::S3,
                             StorageOperation::Copy,
-                            Some(&destination.key),
+                            Some(destination_target),
                             Some(&destination.bucket),
                             error,
                         )
@@ -614,7 +657,7 @@ impl StorageProvider for S3Provider {
                 });
             }
 
-            self.relay_copy(&source, &destination).await
+            self.relay_copy(request, &source, &destination).await
         })
     }
 
@@ -627,6 +670,10 @@ impl StorageProvider for S3Provider {
 }
 
 impl DelimiterListingProvider for S3Provider {
+    fn supports_delimiter(&self, delimiter: &str) -> bool {
+        validate_delimiter(delimiter).is_ok()
+    }
+
     fn list_delimited(&self, request: DelimiterListRequest) -> BoxFuture<'_, DelimiterListResult> {
         Box::pin(async move {
             validate_delimiter(&request.delimiter)?;
@@ -724,7 +771,7 @@ impl GuardedReadProvider for S3Provider {
                     map_sdk_error(
                         ProviderKind::S3,
                         StorageOperation::ObserveSource,
-                        Some(&resolved_key),
+                        Some(&key),
                         Some(&self.bucket),
                         error,
                     )
@@ -775,7 +822,7 @@ impl GuardedReadProvider for S3Provider {
                 map_guarded_sdk_error(
                     StorageOperation::GuardedHead,
                     selection.selector(),
-                    Some(&resolved_key),
+                    Some(&key),
                     Some(&self.bucket),
                     error,
                 )
@@ -814,7 +861,7 @@ impl GuardedReadProvider for S3Provider {
                 map_guarded_sdk_error(
                     StorageOperation::GuardedGet,
                     selection.selector(),
-                    Some(&resolved_key),
+                    Some(&key),
                     Some(&self.bucket),
                     error,
                 )
@@ -895,7 +942,7 @@ impl GuardedReadProvider for S3Provider {
                 map_guarded_sdk_error(
                     StorageOperation::GuardedGetRange,
                     request.selection.selector(),
-                    Some(&resolved_key),
+                    Some(&key),
                     Some(&self.bucket),
                     error,
                 )
@@ -994,6 +1041,504 @@ impl GuardedReadProvider for S3Provider {
             ));
             Ok(GuardedReadResponse { receipt, reader })
         })
+    }
+}
+
+impl ReadResponseProvider for S3Provider {
+    fn read_support(&self) -> ReadSupport {
+        ReadSupport::new(true, true, true)
+    }
+
+    fn read_response(
+        &self,
+        request: ReadRequest,
+        control: OperationControl,
+    ) -> FutureResult<'_, ReadResponse, ExtensionError> {
+        Box::pin(async move {
+            if let Some(kind) = check_control(&control) {
+                return Err(ExtensionError::new(kind, None));
+            }
+
+            match request {
+                ReadRequest::Current(key) => {
+                    let resolved_key = self.resolve_key(&key).map_err(|_| {
+                        ExtensionError::new(
+                            ExtensionErrorKind::InvalidRequest,
+                            Some(StorageError::InvalidArgument {
+                                operation: Some(StorageOperation::Get),
+                                argument: "key".to_string(),
+                                reason: "object key must not be empty".to_string(),
+                            }),
+                        )
+                    })?;
+
+                    let response_status = Arc::new(Mutex::new(None));
+                    let req = self
+                        .guarded_client(response_status.clone())
+                        .get_object()
+                        .bucket(&self.bucket)
+                        .key(&resolved_key);
+
+                    let send_outcome = tokio::select! {
+                        biased;
+                        _ = control.cancellation().cancelled() => {
+                            return Err(ExtensionError::new(ExtensionErrorKind::Cancelled, None));
+                        }
+                        _ = tokio::time::sleep_until(control.deadline().into()) => {
+                            return Err(ExtensionError::new(ExtensionErrorKind::Deadline, None));
+                        }
+                        res = req.send() => res,
+                    };
+
+                    let response = match send_outcome {
+                        Ok(resp) => resp,
+                        Err(sdk_err) => {
+                            if let Some(kind) = check_control(&control) {
+                                return Err(ExtensionError::new(kind, None));
+                            }
+                            let mapped =
+                                map_current_read_sdk_error(Some(&key), Some(&self.bucket), sdk_err);
+                            return Err(extension_error_from_storage(mapped));
+                        }
+                    };
+
+                    if let Some(kind) = check_control(&control) {
+                        return Err(ExtensionError::new(kind, None));
+                    }
+                    if response.delete_marker().unwrap_or(false) {
+                        return Err(ExtensionError::new(
+                            ExtensionErrorKind::Provider,
+                            Some(selected_not_found(StorageOperation::Get, &key)),
+                        ));
+                    }
+
+                    let content_length =
+                        checked_content_length(response.content_length(), StorageOperation::Get)
+                            .map_err(extension_error_from_storage)?;
+                    let status = response_status
+                        .lock()
+                        .expect("response status mutex poisoned")
+                        .ok_or_else(|| {
+                            extension_error_from_storage(invalid_response(
+                                StorageOperation::Get,
+                                "full response status was not available",
+                            ))
+                        })?;
+                    let window = validate_full_get_response_for(
+                        StorageOperation::Get,
+                        status,
+                        response.content_range(),
+                        content_length,
+                    )
+                    .map_err(extension_error_from_storage)?;
+
+                    let receipt = SourceReceipt {
+                        path: key,
+                        native_version: observed_native_version(response.version_id()),
+                        validator: response.e_tag().map(ToString::to_string),
+                        total_size: content_length,
+                        requested_window: None,
+                        returned_window: window,
+                    };
+                    let metadata = extract_read_metadata(&response);
+                    let reader: BoxedByteStream = Box::new(DeclaredLengthRead::new(
+                        Box::new(response.body.into_async_read()),
+                        content_length,
+                    ));
+                    Ok(ReadResponse::new(
+                        reader,
+                        receipt,
+                        ReadEnforcement::Unguarded,
+                        metadata,
+                    ))
+                }
+                ReadRequest::Guarded(selection) => {
+                    let key = selection.key().to_string();
+                    selection
+                        .validate_for(
+                            &self.guarded_target_identity(),
+                            &key,
+                            StorageOperation::GuardedGet,
+                        )
+                        .map_err(|err| {
+                            ExtensionError::new(ExtensionErrorKind::InvalidRequest, Some(err))
+                        })?;
+                    let resolved_key = self.resolve_key(&key).map_err(|_| {
+                        ExtensionError::new(
+                            ExtensionErrorKind::InvalidRequest,
+                            Some(StorageError::InvalidArgument {
+                                operation: Some(StorageOperation::GuardedGet),
+                                argument: "key".to_string(),
+                                reason: "object key must not be empty".to_string(),
+                            }),
+                        )
+                    })?;
+
+                    let enforcement = match selection.selector() {
+                        SourceSelector::NativeVersion { .. } => ReadEnforcement::NativeVersion,
+                        SourceSelector::ValidatorMatch { .. } => ReadEnforcement::ValidatorMatch,
+                    };
+
+                    let response_status = Arc::new(Mutex::new(None));
+                    let req = apply_get_selector(
+                        self.guarded_client(response_status.clone())
+                            .get_object()
+                            .bucket(&self.bucket)
+                            .key(&resolved_key),
+                        selection.selector(),
+                    );
+
+                    let send_outcome = tokio::select! {
+                        biased;
+                        _ = control.cancellation().cancelled() => {
+                            return Err(ExtensionError::new(ExtensionErrorKind::Cancelled, None));
+                        }
+                        _ = tokio::time::sleep_until(control.deadline().into()) => {
+                            return Err(ExtensionError::new(ExtensionErrorKind::Deadline, None));
+                        }
+                        res = req.send() => res,
+                    };
+
+                    let response = match send_outcome {
+                        Ok(resp) => resp,
+                        Err(sdk_err) => {
+                            if let Some(kind) = check_control(&control) {
+                                return Err(ExtensionError::new(kind, None));
+                            }
+                            let mapped = map_guarded_sdk_error(
+                                StorageOperation::GuardedGet,
+                                selection.selector(),
+                                Some(&key),
+                                Some(&self.bucket),
+                                sdk_err,
+                            );
+                            return Err(extension_error_from_storage(mapped));
+                        }
+                    };
+
+                    if let Some(kind) = check_control(&control) {
+                        return Err(ExtensionError::new(kind, None));
+                    }
+                    if response.delete_marker().unwrap_or(false) {
+                        return Err(ExtensionError::new(
+                            ExtensionErrorKind::Provider,
+                            Some(selected_not_found(StorageOperation::GuardedGet, &key)),
+                        ));
+                    }
+
+                    let content_length = checked_content_length(
+                        response.content_length(),
+                        StorageOperation::GuardedGet,
+                    )
+                    .map_err(extension_error_from_storage)?;
+                    let status = response_status
+                        .lock()
+                        .expect("response status mutex poisoned")
+                        .ok_or_else(|| {
+                            extension_error_from_storage(invalid_response(
+                                StorageOperation::GuardedGet,
+                                "full response status was not available",
+                            ))
+                        })?;
+                    let window = validate_full_get_response(
+                        status,
+                        response.content_range(),
+                        content_length,
+                    )
+                    .map_err(extension_error_from_storage)?;
+                    let receipt = checked_receipt(
+                        &key,
+                        selection.selector(),
+                        S3ReceiptEvidence::from_get(&response),
+                        None,
+                        window,
+                        StorageOperation::GuardedGet,
+                    )
+                    .map_err(extension_error_from_storage)?;
+                    let metadata = extract_read_metadata(&response);
+                    let reader: BoxedByteStream = Box::new(DeclaredLengthRead::new(
+                        Box::new(response.body.into_async_read()),
+                        content_length,
+                    ));
+                    Ok(ReadResponse::new(reader, receipt, enforcement, metadata))
+                }
+                _ => Err(ExtensionError::new(
+                    ExtensionErrorKind::UnsupportedReadSelection,
+                    None,
+                )),
+            }
+        })
+    }
+}
+
+struct S3PreparedPut {
+    write_config: aws_sdk_s3::Config,
+    bucket: String,
+    key: String,
+    resolved_key: String,
+    content_length: u64,
+    content_type: Option<String>,
+    metadata: BTreeMap<String, String>,
+    if_match: Option<String>,
+    if_none_match: Option<String>,
+    precondition_kind: PutPreconditionKind,
+}
+
+impl PreparedPut for S3PreparedPut {
+    fn execute(
+        self: Box<Self>,
+        mut body: BoxedByteStream,
+        control: OperationControl,
+    ) -> FutureResult<'static, PutResult, PutFailure> {
+        Box::pin(async move {
+            let Self {
+                write_config,
+                bucket,
+                key,
+                resolved_key,
+                content_length,
+                content_type,
+                metadata,
+                if_match,
+                if_none_match,
+                precondition_kind,
+            } = *self;
+
+            if let Some(kind) = check_control(&control) {
+                return Err(PutFailure::new(
+                    CommitKnowledge::NotStarted,
+                    ExtensionError::new(kind, None),
+                ));
+            }
+
+            let abort_state: Arc<Mutex<Option<BodyAbort>>> = Arc::new(Mutex::new(None));
+            let delivered = Arc::new(AtomicU64::new(0));
+
+            let byte_stream = if content_length == 0 {
+                let mut probe = [0_u8; 1];
+                let probe_res = tokio::select! {
+                    biased;
+                    _ = control.cancellation().cancelled() => {
+                        return Err(PutFailure::new(
+                            CommitKnowledge::NotStarted,
+                            ExtensionError::new(ExtensionErrorKind::Cancelled, None),
+                        ));
+                    }
+                    _ = tokio::time::sleep_until(control.deadline().into()) => {
+                        return Err(PutFailure::new(
+                            CommitKnowledge::NotStarted,
+                            ExtensionError::new(ExtensionErrorKind::Deadline, None),
+                        ));
+                    }
+                    res = tokio::io::AsyncReadExt::read(&mut body, &mut probe) => res,
+                };
+                match probe_res {
+                    Ok(0) => {
+                        if let Some(kind) = check_control(&control) {
+                            return Err(PutFailure::new(
+                                CommitKnowledge::NotStarted,
+                                ExtensionError::new(kind, None),
+                            ));
+                        }
+                        ByteStream::from_static(&[])
+                    }
+                    Ok(_) => {
+                        return Err(PutFailure::new(
+                            CommitKnowledge::NotStarted,
+                            ExtensionError::new(
+                                ExtensionErrorKind::InvalidRequest,
+                                Some(StorageError::InvalidArgument {
+                                    operation: Some(StorageOperation::Put),
+                                    argument: "content_length".to_string(),
+                                    reason: "stream exceeded admitted content_length".to_string(),
+                                }),
+                            ),
+                        ));
+                    }
+                    Err(err) => {
+                        let kind = check_control(&control).unwrap_or(ExtensionErrorKind::Provider);
+                        return Err(PutFailure::new(
+                            CommitKnowledge::NotStarted,
+                            ExtensionError::new(
+                                kind,
+                                Some(StorageError::Io {
+                                    operation: Some(StorageOperation::Put),
+                                    source: std::io::Error::new(
+                                        err.kind(),
+                                        "admitted write body read failed",
+                                    ),
+                                }),
+                            ),
+                        ));
+                    }
+                }
+            } else {
+                byte_stream_from_tracked_reader(
+                    body,
+                    content_length,
+                    abort_state.clone(),
+                    delivered.clone(),
+                    control.clone(),
+                )
+            };
+
+            let sdk_length =
+                i64::try_from(content_length).expect("validated <= 5 GiB at admission");
+            let client = Client::from_conf(write_config);
+            let req = client
+                .put_object()
+                .bucket(&bucket)
+                .key(&resolved_key)
+                .content_length(sdk_length)
+                .set_content_type(content_type)
+                .set_metadata((!metadata.is_empty()).then(|| metadata.into_iter().collect()))
+                .set_if_match(if_match)
+                .set_if_none_match(if_none_match)
+                .body(byte_stream);
+
+            let send_outcome = tokio::select! {
+                biased;
+                _ = control.cancellation().cancelled() => {
+                    return Err(PutFailure::new(
+                        CommitKnowledge::Unknown,
+                        ExtensionError::new(ExtensionErrorKind::Cancelled, None),
+                    ));
+                }
+                _ = tokio::time::sleep_until(control.deadline().into()) => {
+                    return Err(PutFailure::new(
+                        CommitKnowledge::Unknown,
+                        ExtensionError::new(ExtensionErrorKind::Deadline, None),
+                    ));
+                }
+                res = req.send() => res,
+            };
+
+            match send_outcome {
+                Ok(response) => {
+                    let recorded_abort = *abort_state.lock().expect("abort state mutex poisoned");
+                    finalize_prepared_put_ok(
+                        key,
+                        content_length,
+                        response.e_tag().map(ToString::to_string),
+                        recorded_abort,
+                        delivered.load(Ordering::Acquire),
+                        &control,
+                    )
+                }
+                Err(sdk_err) => {
+                    let recorded_abort = *abort_state.lock().expect("abort state mutex poisoned");
+                    Err(classify_prepared_put_error(
+                        Some(&key),
+                        Some(&bucket),
+                        precondition_kind,
+                        recorded_abort,
+                        &control,
+                        sdk_err,
+                    ))
+                }
+            }
+        })
+    }
+}
+
+impl AdmittedPutProvider for S3Provider {
+    fn put_support(&self) -> PutSupport {
+        PutSupport::new(
+            WriteMode::SinglePart,
+            true,
+            true,
+            true,
+            true,
+            true,
+            S3_MAX_SINGLE_PUT_BYTES,
+        )
+    }
+
+    fn admit_put(
+        &self,
+        key: &str,
+        options: PutOptions,
+        mode: WriteMode,
+    ) -> std::result::Result<Box<dyn PreparedPut>, ExtensionError> {
+        match mode {
+            WriteMode::SinglePart => {}
+            _ => {
+                return Err(ExtensionError::new(
+                    ExtensionErrorKind::UnsupportedWriteMode,
+                    None,
+                ));
+            }
+        }
+
+        let resolved_key = self.resolve_key(key).map_err(|_| {
+            ExtensionError::new(
+                ExtensionErrorKind::InvalidRequest,
+                Some(StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::Put),
+                    argument: "key".to_string(),
+                    reason: "object key must not be empty".to_string(),
+                }),
+            )
+        })?;
+
+        let PutOptions {
+            content_length,
+            content_type,
+            metadata,
+            precondition,
+        } = options;
+
+        let content_length = content_length.ok_or_else(|| {
+            ExtensionError::new(
+                ExtensionErrorKind::LengthRequired,
+                Some(StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::Put),
+                    argument: "content_length".to_string(),
+                    reason: "S3 admitted writes require a known content length".to_string(),
+                }),
+            )
+        })?;
+        if content_length > S3_MAX_SINGLE_PUT_BYTES {
+            return Err(ExtensionError::new(
+                ExtensionErrorKind::LengthLimit,
+                Some(StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::Put),
+                    argument: "content_length".to_string(),
+                    reason: "content length exceeds the 5 GiB S3 single-PUT limit".to_string(),
+                }),
+            ));
+        }
+
+        validate_put_headers(content_type.as_deref(), &metadata)
+            .map_err(|err| ExtensionError::new(ExtensionErrorKind::InvalidRequest, Some(err)))?;
+
+        let (if_match, if_none_match, precondition_kind) = match precondition {
+            PutPrecondition::None => (None, None, PutPreconditionKind::None),
+            PutPrecondition::MustNotExist => (
+                None,
+                Some("*".to_string()),
+                PutPreconditionKind::MustNotExist,
+            ),
+            PutPrecondition::Match { token } => {
+                validate_match_token(&token).map_err(|err| {
+                    ExtensionError::new(ExtensionErrorKind::InvalidRequest, Some(err))
+                })?;
+                (Some(token), None, PutPreconditionKind::Match)
+            }
+        };
+
+        Ok(Box::new(S3PreparedPut {
+            write_config: self.guarded_config.clone(),
+            bucket: self.bucket.clone(),
+            key: key.to_string(),
+            resolved_key,
+            content_length,
+            content_type,
+            metadata,
+            if_match,
+            if_none_match,
+            precondition_kind,
+        }))
     }
 }
 
@@ -1190,6 +1735,119 @@ fn find_optional(values: &BTreeMap<String, String>, candidates: &[&str]) -> Opti
 
 fn byte_stream_from_reader(reader: BoxedByteStream, content_length: u64) -> ByteStream {
     ByteStream::from_body_1_x(AsyncReadBody::new(reader, content_length))
+}
+
+fn byte_stream_from_tracked_reader(
+    reader: BoxedByteStream,
+    content_length: u64,
+    abort_state: Arc<Mutex<Option<BodyAbort>>>,
+    delivered: Arc<AtomicU64>,
+    control: OperationControl,
+) -> ByteStream {
+    ByteStream::from_body_1_x(AsyncReadBody::tracked(
+        reader,
+        content_length,
+        abort_state,
+        delivered,
+        control,
+    ))
+}
+
+fn check_control(control: &OperationControl) -> Option<ExtensionErrorKind> {
+    if control.cancellation().is_cancelled() {
+        Some(ExtensionErrorKind::Cancelled)
+    } else if Instant::now() >= control.deadline() {
+        Some(ExtensionErrorKind::Deadline)
+    } else {
+        None
+    }
+}
+
+fn extension_error_from_storage(error: StorageError) -> ExtensionError {
+    let kind = match &error {
+        StorageError::InvalidArgument { .. } => ExtensionErrorKind::InvalidRequest,
+        _ => ExtensionErrorKind::Provider,
+    };
+    ExtensionError::new(kind, Some(error))
+}
+
+fn extract_read_metadata(
+    response: &aws_sdk_s3::operation::get_object::GetObjectOutput,
+) -> ReadMetadata {
+    let content_type = response.content_type().map(ToString::to_string);
+    let user_metadata = if response.missing_meta().unwrap_or(0) != 0 {
+        Evidence::Unavailable
+    } else {
+        Evidence::Available(
+            response
+                .metadata()
+                .map(|values| values.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default(),
+        )
+    };
+    ReadMetadata::new(Evidence::Available(content_type), user_metadata)
+}
+
+fn is_http_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+fn is_valid_header_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte == b'\t' || (0x20..=0x7e).contains(&byte))
+}
+
+fn validate_put_headers(
+    content_type: Option<&str>,
+    metadata: &BTreeMap<String, String>,
+) -> Result<()> {
+    if let Some(ct) = content_type {
+        if !is_valid_header_value(ct) {
+            return Err(StorageError::InvalidArgument {
+                operation: Some(StorageOperation::Put),
+                argument: "content_type".to_string(),
+                reason: "content_type contains invalid or non-ASCII HTTP header bytes".to_string(),
+            });
+        }
+    }
+    let mut seen_lowercase = std::collections::BTreeSet::new();
+    for (key, value) in metadata {
+        if key.is_empty() || !key.bytes().all(is_http_tchar) || !is_valid_header_value(value) {
+            return Err(StorageError::InvalidArgument {
+                operation: Some(StorageOperation::Put),
+                argument: "metadata".to_string(),
+                reason: "user metadata contains an invalid or non-ASCII HTTP header name or value"
+                    .to_string(),
+            });
+        }
+        if !seen_lowercase.insert(key.to_ascii_lowercase()) {
+            return Err(StorageError::InvalidArgument {
+                operation: Some(StorageOperation::Put),
+                argument: "metadata".to_string(),
+                reason: "user metadata contains duplicate case-insensitive header names"
+                    .to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn encode_copy_source(bucket: &str, key: &str) -> String {
@@ -1403,10 +2061,24 @@ fn validate_full_get_response(
     content_range: Option<&str>,
     content_length: Option<u64>,
 ) -> Result<Option<ByteWindow>> {
+    validate_full_get_response_for(
+        StorageOperation::GuardedGet,
+        status,
+        content_range,
+        content_length,
+    )
+}
+
+fn validate_full_get_response_for(
+    operation: StorageOperation,
+    status: u16,
+    content_range: Option<&str>,
+    content_length: Option<u64>,
+) -> Result<Option<ByteWindow>> {
     if status != 200 {
         return Err(invalid_response(
-            StorageOperation::GuardedGet,
-            "full guarded read received a partial or unexpected successful status",
+            operation,
+            "full read received a partial or unexpected successful status",
         ));
     }
     let Some(content_range) = content_range else {
@@ -1417,23 +2089,69 @@ fn validate_full_get_response(
                 end: length - 1,
             }));
     };
-    let parsed = parse_content_range(Some(content_range), StorageOperation::GuardedGet)?;
-    let returned_length = parsed.window.checked_len().ok_or_else(|| {
-        invalid_response(
-            StorageOperation::GuardedGet,
-            "full response window length overflows u64",
-        )
-    })?;
+    let parsed = parse_content_range(Some(content_range), operation)?;
+    let returned_length = parsed
+        .window
+        .checked_len()
+        .ok_or_else(|| invalid_response(operation, "full response window length overflows u64"))?;
     if parsed.window.start != 0
         || parsed.total_size != Some(returned_length)
         || content_length != Some(returned_length)
     {
         return Err(invalid_response(
-            StorageOperation::GuardedGet,
+            operation,
             "full response content range does not describe the entire object",
         ));
     }
     Ok(Some(parsed.window))
+}
+
+fn map_current_read_sdk_error<E>(
+    target: Option<&str>,
+    container: Option<&str>,
+    error: aws_sdk_s3::error::SdkError<E>,
+) -> StorageError
+where
+    E: std::error::Error + ProvideErrorMetadata + Send + Sync + 'static,
+{
+    use aws_sdk_s3::error::SdkError;
+
+    if let SdkError::ServiceError(context) = &error {
+        let status = context.raw().status().as_u16();
+        let code = context.err().code().unwrap_or_default();
+        let delete_marker = context
+            .raw()
+            .headers()
+            .get("x-amz-delete-marker")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        if status == 304 {
+            return invalid_response(
+                StorageOperation::Get,
+                "read received an unexpected not-modified response",
+            );
+        }
+        if status == 405 && delete_marker {
+            return selected_not_found(StorageOperation::Get, target.unwrap_or_default());
+        }
+        if status == 403 && code.is_empty() {
+            return StorageError::AccessDenied {
+                provider: ProviderKind::S3,
+                operation: StorageOperation::Get,
+                target: target.map(ToString::to_string),
+                detail: "access denied".to_string(),
+            };
+        }
+        if status == 404 && code.is_empty() {
+            return selected_not_found(StorageOperation::Get, target.unwrap_or_default());
+        }
+    }
+    map_sdk_error(
+        ProviderKind::S3,
+        StorageOperation::Get,
+        target,
+        container,
+        error,
+    )
 }
 
 fn map_guarded_sdk_error<E>(
@@ -1598,6 +2316,7 @@ where
 
     match error {
         SdkError::ServiceError(context) => {
+            let status = context.raw().status().as_u16();
             let retry_after = context
                 .raw()
                 .headers()
@@ -1653,18 +2372,71 @@ where
                     operation: StorageOperation::Put,
                     retry_after,
                 },
+                "EntityTooLarge" | "MaxMessageLengthExceeded" => StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::Put),
+                    argument: "content_length".to_string(),
+                    reason: code.to_string(),
+                },
                 "InvalidRequest" | "InvalidWriteOffset" => StorageError::InvalidArgument {
                     operation: Some(StorageOperation::Put),
                     argument: target.unwrap_or_default().to_string(),
                     reason: code.to_string(),
                 },
+                "" => match status {
+                    412 => {
+                        let kind = match precondition {
+                            PutPreconditionKind::MustNotExist => ConflictKind::AlreadyExists,
+                            PutPreconditionKind::Match => ConflictKind::TokenMismatch,
+                            PutPreconditionKind::None => ConflictKind::Other,
+                        };
+                        StorageError::Conflict {
+                            provider: ProviderKind::S3,
+                            operation: StorageOperation::Put,
+                            target: target.map(ToString::to_string),
+                            kind,
+                            detail: "precondition failed".to_string(),
+                        }
+                    }
+                    409 => StorageError::Conflict {
+                        provider: ProviderKind::S3,
+                        operation: StorageOperation::Put,
+                        target: target.map(ToString::to_string),
+                        kind: ConflictKind::Other,
+                        detail: "conditional request conflict".to_string(),
+                    },
+                    403 => StorageError::AccessDenied {
+                        provider: ProviderKind::S3,
+                        operation: StorageOperation::Put,
+                        target: target.map(ToString::to_string),
+                        detail: "access denied".to_string(),
+                    },
+                    401 => StorageError::InvalidCredentials {
+                        provider: ProviderKind::S3,
+                        detail: "unauthorized".to_string(),
+                    },
+                    429 => StorageError::Throttled {
+                        provider: ProviderKind::S3,
+                        operation: StorageOperation::Put,
+                        retry_after,
+                    },
+                    _ => StorageError::Other {
+                        provider: Some(ProviderKind::S3),
+                        operation: Some(StorageOperation::Put),
+                        detail: "S3 put failed".to_string(),
+                        source: None,
+                    },
+                },
                 _ => StorageError::Other {
                     provider: Some(ProviderKind::S3),
                     operation: Some(StorageOperation::Put),
-                    detail: if code.is_empty() {
-                        "S3 put failed".to_string()
-                    } else {
+                    detail: if code.len() <= 64
+                        && code
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                    {
                         code.to_string()
+                    } else {
+                        "S3 put failed".to_string()
                     },
                     source: None,
                 },
@@ -1772,10 +2544,10 @@ where
             operation,
             detail: "S3 response transport failed".to_string(),
         },
-        SdkError::ConstructionFailure(construction_error) => StorageError::InvalidArgument {
+        SdkError::ConstructionFailure(_) => StorageError::InvalidArgument {
             operation: Some(operation),
             argument: target.unwrap_or_default().to_string(),
-            reason: format!("{construction_error:?}"),
+            reason: "failed to construct S3 request".to_string(),
         },
         _ => StorageError::Other {
             provider: Some(provider),
@@ -1783,6 +2555,166 @@ where
             detail: "S3 request failed".to_string(),
             source: None,
         },
+    }
+}
+
+fn body_abort_extension_error(abort: BodyAbort, control: &OperationControl) -> ExtensionError {
+    if let Some(kind) = check_control(control) {
+        return ExtensionError::new(kind, None);
+    }
+    match abort {
+        BodyAbort::Control(kind) => ExtensionError::new(kind, None),
+        BodyAbort::ShortStream => ExtensionError::new(
+            ExtensionErrorKind::InvalidRequest,
+            Some(StorageError::InvalidArgument {
+                operation: Some(StorageOperation::Put),
+                argument: "content_length".to_string(),
+                reason: "stream ended short of admitted content_length".to_string(),
+            }),
+        ),
+        BodyAbort::OverlongStream => ExtensionError::new(
+            ExtensionErrorKind::InvalidRequest,
+            Some(StorageError::InvalidArgument {
+                operation: Some(StorageOperation::Put),
+                argument: "content_length".to_string(),
+                reason: "stream exceeded admitted content_length".to_string(),
+            }),
+        ),
+        BodyAbort::ReadError(kind) => ExtensionError::new(
+            ExtensionErrorKind::Provider,
+            Some(StorageError::Io {
+                operation: Some(StorageOperation::Put),
+                source: std::io::Error::new(kind, "admitted write body read failed"),
+            }),
+        ),
+    }
+}
+
+fn finalize_prepared_put_ok(
+    key: String,
+    content_length: u64,
+    etag: Option<String>,
+    recorded_abort: Option<BodyAbort>,
+    delivered_bytes: u64,
+    control: &OperationControl,
+) -> std::result::Result<PutResult, PutFailure> {
+    if let Some(abort) = recorded_abort {
+        return Err(PutFailure::new(
+            CommitKnowledge::Committed,
+            body_abort_extension_error(abort, control),
+        ));
+    }
+    if delivered_bytes != content_length {
+        return Err(PutFailure::new(
+            CommitKnowledge::Committed,
+            ExtensionError::new(
+                ExtensionErrorKind::Provider,
+                Some(invalid_response(
+                    StorageOperation::Put,
+                    "S3 acknowledged put before reading admitted content_length",
+                )),
+            ),
+        ));
+    }
+    if let Some(kind) = check_control(control) {
+        return Err(PutFailure::new(
+            CommitKnowledge::Committed,
+            ExtensionError::new(kind, None),
+        ));
+    }
+    Ok(PutResult {
+        path: key,
+        etag,
+        size: Some(content_length),
+    })
+}
+
+fn classify_prepared_put_error<E>(
+    target: Option<&str>,
+    container: Option<&str>,
+    precondition: PutPreconditionKind,
+    recorded_abort: Option<BodyAbort>,
+    control: &OperationControl,
+    error: aws_sdk_s3::error::SdkError<E>,
+) -> PutFailure
+where
+    E: std::error::Error + ProvideErrorMetadata + Send + Sync + 'static,
+{
+    use aws_sdk_s3::error::SdkError;
+
+    match &error {
+        SdkError::ConstructionFailure(_) => {
+            if let Some(kind) = check_control(control) {
+                return PutFailure::new(
+                    CommitKnowledge::NotStarted,
+                    ExtensionError::new(kind, None),
+                );
+            }
+            let mapped = map_put_error(target, container, precondition, error);
+            PutFailure::new(
+                CommitKnowledge::NotStarted,
+                ExtensionError::new(ExtensionErrorKind::InvalidRequest, Some(mapped)),
+            )
+        }
+        SdkError::ServiceError(context) => {
+            let status = context.raw().status().as_u16();
+            let code = context.err().code().unwrap_or_default();
+            let is_length_limit = matches!(code, "EntityTooLarge" | "MaxMessageLengthExceeded");
+            let commit = if (400..=499).contains(&status) && status != 408 {
+                CommitKnowledge::NotCommitted
+            } else {
+                CommitKnowledge::Unknown
+            };
+            if let Some(kind) = check_control(control) {
+                return PutFailure::new(commit, ExtensionError::new(kind, None));
+            }
+            let mapped = map_put_error(target, container, precondition, error);
+            if !is_length_limit && matches!(mapped, StorageError::Other { .. }) {
+                if let Some(abort) = recorded_abort {
+                    return PutFailure::new(commit, body_abort_extension_error(abort, control));
+                }
+            }
+            let ext_kind = if is_length_limit {
+                ExtensionErrorKind::LengthLimit
+            } else if matches!(mapped, StorageError::InvalidArgument { .. }) {
+                ExtensionErrorKind::InvalidRequest
+            } else {
+                ExtensionErrorKind::Provider
+            };
+            PutFailure::new(commit, ExtensionError::new(ext_kind, Some(mapped)))
+        }
+        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) | SdkError::ResponseError(_) => {
+            if let Some(kind) = check_control(control) {
+                return PutFailure::new(CommitKnowledge::Unknown, ExtensionError::new(kind, None));
+            }
+            if let Some(abort) = recorded_abort {
+                return PutFailure::new(
+                    CommitKnowledge::Unknown,
+                    body_abort_extension_error(abort, control),
+                );
+            }
+            let mapped = map_put_error(target, container, precondition, error);
+            PutFailure::new(
+                CommitKnowledge::Unknown,
+                ExtensionError::new(ExtensionErrorKind::Provider, Some(mapped)),
+            )
+        }
+        _ => {
+            if let Some(kind) = check_control(control) {
+                return PutFailure::new(CommitKnowledge::Unknown, ExtensionError::new(kind, None));
+            }
+            if let Some(abort) = recorded_abort {
+                return PutFailure::new(
+                    CommitKnowledge::Unknown,
+                    body_abort_extension_error(abort, control),
+                );
+            }
+            let mapped = map_put_error(target, container, precondition, error);
+            PutFailure::new(
+                CommitKnowledge::Unknown,
+                ExtensionError::new(ExtensionErrorKind::Provider, Some(mapped)),
+            )
+        }
     }
 }
 
@@ -2002,6 +2934,96 @@ impl AsyncReadBody {
             reader: Mutex::new(reader),
             finished: false,
             remaining: content_length,
+            pending_final: None,
+            abort_state: None,
+            delivered: None,
+            control: None,
+        }
+    }
+
+    fn tracked(
+        reader: BoxedByteStream,
+        content_length: u64,
+        abort_state: Arc<Mutex<Option<BodyAbort>>>,
+        delivered: Arc<AtomicU64>,
+        control: OperationControl,
+    ) -> Self {
+        Self {
+            reader: Mutex::new(reader),
+            finished: false,
+            remaining: content_length,
+            pending_final: None,
+            abort_state: Some(abort_state),
+            delivered: Some(delivered),
+            control: Some(control),
+        }
+    }
+
+    fn record_abort(&self, abort: BodyAbort) {
+        if let Some(state) = &self.abort_state {
+            state
+                .lock()
+                .expect("abort state mutex poisoned")
+                .get_or_insert(abort);
+        }
+    }
+
+    fn add_delivered(&self, count: u64) {
+        if let Some(delivered) = &self.delivered {
+            delivered.fetch_add(count, Ordering::Release);
+        }
+    }
+
+    fn poll_eof_probe(
+        &mut self,
+        cx: &mut Context<'_>,
+        reader: &mut BoxedByteStream,
+    ) -> Poll<Option<std::result::Result<Frame<Bytes>, std::io::Error>>> {
+        let mut probe = [0_u8; 1];
+        let mut read_buf = ReadBuf::new(&mut probe);
+
+        match Pin::new(reader).poll_read(cx, &mut read_buf) {
+            Poll::Ready(Ok(())) => {
+                if let Some(control) = &self.control {
+                    if let Some(kind) = check_control(control) {
+                        self.pending_final = None;
+                        self.finished = true;
+                        self.record_abort(BodyAbort::Control(kind));
+                        return Poll::Ready(Some(Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "admitted write stopped before completion",
+                        ))));
+                    }
+                }
+                self.finished = true;
+                if read_buf.filled().is_empty() {
+                    if let Some(final_chunk) = self.pending_final.take() {
+                        self.add_delivered(final_chunk.len() as u64);
+                        Poll::Ready(Some(Ok(Frame::data(final_chunk))))
+                    } else {
+                        Poll::Ready(None)
+                    }
+                } else {
+                    self.pending_final = None;
+                    self.record_abort(BodyAbort::OverlongStream);
+                    Poll::Ready(Some(Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "stream exceeded declared content length",
+                    ))))
+                }
+            }
+            Poll::Ready(Err(error)) => {
+                self.pending_final = None;
+                self.finished = true;
+                self.record_abort(BodyAbort::ReadError(error.kind()));
+                let returned_error = if self.abort_state.is_some() {
+                    std::io::Error::new(error.kind(), "admitted write body read failed")
+                } else {
+                    error
+                };
+                Poll::Ready(Some(Err(returned_error)))
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -2020,30 +3042,29 @@ impl http_body::Body for AsyncReadBody {
             return Poll::Ready(None);
         }
 
+        if let Some(control) = &this.control {
+            if let Some(kind) = check_control(control) {
+                this.pending_final = None;
+                this.finished = true;
+                this.record_abort(BodyAbort::Control(kind));
+                return Poll::Ready(Some(Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "admitted write stopped before completion",
+                ))));
+            }
+        }
+
         let mut reader = this.reader.lock().expect("async read body mutex poisoned");
 
         if this.remaining == 0 {
-            let mut probe = [0_u8; 1];
-            let mut read_buf = ReadBuf::new(&mut probe);
-
-            return match Pin::new(&mut *reader).poll_read(cx, &mut read_buf) {
-                Poll::Ready(Ok(())) => {
-                    this.finished = true;
-                    if read_buf.filled().is_empty() {
-                        Poll::Ready(None)
-                    } else {
-                        Poll::Ready(Some(Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "stream exceeded declared content length",
-                        ))))
-                    }
-                }
-                Poll::Ready(Err(error)) => {
-                    this.finished = true;
-                    Poll::Ready(Some(Err(error)))
-                }
-                Poll::Pending => Poll::Pending,
-            };
+            let mut split_reader = std::mem::replace(
+                &mut *reader,
+                Box::new(tokio::io::empty()) as BoxedByteStream,
+            );
+            drop(reader);
+            let poll_res = this.poll_eof_probe(cx, &mut split_reader);
+            *this.reader.lock().expect("async read body mutex poisoned") = split_reader;
+            return poll_res;
         }
 
         let read_limit = this.remaining.min(8 * 1024) as usize;
@@ -2052,24 +3073,65 @@ impl http_body::Body for AsyncReadBody {
 
         match Pin::new(&mut *reader).poll_read(cx, &mut read_buf) {
             Poll::Ready(Ok(())) => {
+                if let Some(control) = &this.control {
+                    if let Some(kind) = check_control(control) {
+                        drop(reader);
+                        this.pending_final = None;
+                        this.finished = true;
+                        this.record_abort(BodyAbort::Control(kind));
+                        return Poll::Ready(Some(Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "admitted write stopped before completion",
+                        ))));
+                    }
+                }
+
                 let filled = read_buf.filled();
                 if filled.is_empty() {
+                    let rem = this.remaining;
+                    drop(reader);
                     this.finished = true;
+                    this.record_abort(BodyAbort::ShortStream);
                     return Poll::Ready(Some(Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
                         format!(
                             "stream ended before declared content length; {} bytes remaining",
-                            this.remaining
+                            rem
                         ),
                     ))));
                 }
 
-                this.remaining -= filled.len() as u64;
-                Poll::Ready(Some(Ok(Frame::data(Bytes::copy_from_slice(filled)))))
+                let chunk = Bytes::copy_from_slice(filled);
+                this.remaining -= chunk.len() as u64;
+                if this.remaining == 0 {
+                    this.pending_final = Some(chunk);
+                    let mut split_reader = std::mem::replace(
+                        &mut *reader,
+                        Box::new(tokio::io::empty()) as BoxedByteStream,
+                    );
+                    drop(reader);
+                    let poll_res = this.poll_eof_probe(cx, &mut split_reader);
+                    *this.reader.lock().expect("async read body mutex poisoned") = split_reader;
+                    return poll_res;
+                }
+
+                let chunk_len = chunk.len() as u64;
+                drop(reader);
+                this.add_delivered(chunk_len);
+                Poll::Ready(Some(Ok(Frame::data(chunk))))
             }
             Poll::Ready(Err(error)) => {
+                let kind = error.kind();
+                let sanitized = this.abort_state.is_some();
+                drop(reader);
                 this.finished = true;
-                Poll::Ready(Some(Err(error)))
+                this.record_abort(BodyAbort::ReadError(kind));
+                let returned_error = if sanitized {
+                    std::io::Error::new(kind, "admitted write body read failed")
+                } else {
+                    error
+                };
+                Poll::Ready(Some(Err(returned_error)))
             }
             Poll::Pending => Poll::Pending,
         }
@@ -2080,7 +3142,11 @@ impl http_body::Body for AsyncReadBody {
     }
 
     fn size_hint(&self) -> SizeHint {
-        SizeHint::with_exact(self.remaining)
+        let pending_len = self
+            .pending_final
+            .as_ref()
+            .map_or(0, |chunk| chunk.len() as u64);
+        SizeHint::with_exact(self.remaining + pending_len)
     }
 }
 
@@ -4334,5 +5400,1109 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be monotonic enough for tests")
             .as_nanos()
+    }
+
+    struct PanicOnPollReader;
+
+    impl AsyncRead for PanicOnPollReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            panic!("reader must not be polled when admission or ceiling validation rejects");
+        }
+    }
+
+    fn active_control(timeout: Duration) -> OperationControl {
+        OperationControl::new(
+            Instant::now() + timeout,
+            storageprims_core::Cancellation::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn delimiter_discovery_matches_s3_delimiter_validation_without_io() {
+        let provider = scripted_provider("http://127.0.0.1:9".to_string()).await;
+        let listing = provider
+            .delimiter_lists()
+            .expect("S3 provider exposes delimiter listing");
+
+        assert!(listing.supports_delimiter("/"));
+        assert!(listing.supports_delimiter(":"));
+        assert!(listing.supports_delimiter(&"a".repeat(1024)));
+
+        assert!(!listing.supports_delimiter(""));
+        assert!(!listing.supports_delimiter("\0"));
+        assert!(!listing.supports_delimiter("bad\ndelim"));
+        assert!(!listing.supports_delimiter("bad\x7fdelim"));
+        assert!(!listing.supports_delimiter(&"a".repeat(1025)));
+    }
+
+    #[tokio::test]
+    async fn single_put_ceiling_and_admission_reject_before_polling_body_or_network() {
+        let provider = scripted_provider("http://127.0.0.1:9".to_string()).await;
+
+        let over_limit = S3_MAX_SINGLE_PUT_BYTES + 1;
+        let err = provider
+            .put(
+                "oversized.bin",
+                Box::new(PanicOnPollReader),
+                PutOptions {
+                    content_length: Some(over_limit),
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("ordinary put must enforce 5 GiB single-part ceiling before polling body");
+        assert!(matches!(
+            err,
+            StorageError::InvalidArgument {
+                operation: Some(StorageOperation::Put),
+                ref argument,
+                ..
+            } if argument == "content_length"
+        ));
+
+        for empty_like in ["", "/", "///"] {
+            let key_err = provider
+                .put(
+                    empty_like,
+                    Box::new(PanicOnPollReader),
+                    PutOptions {
+                        content_length: Some(1),
+                        ..PutOptions::default()
+                    },
+                )
+                .await
+                .expect_err("empty or slash-only keys must fail before polling body");
+            assert!(matches!(
+                key_err,
+                StorageError::InvalidArgument { ref argument, .. } if argument == "key"
+            ));
+        }
+
+        let writer = provider
+            .admitted_puts()
+            .expect("S3 provider exposes admitted writes");
+        let support = writer.put_support();
+        assert_eq!(support.mode(), WriteMode::SinglePart);
+        assert!(support.unconditional());
+        assert!(support.create_only());
+        assert!(support.validator_match());
+        assert!(support.content_type());
+        assert!(support.user_metadata());
+        assert_eq!(support.max_content_length(), S3_MAX_SINGLE_PUT_BYTES);
+
+        assert!(writer
+            .admit_put(
+                "exact-ceiling.bin",
+                PutOptions {
+                    content_length: Some(S3_MAX_SINGLE_PUT_BYTES),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .is_ok());
+
+        let missing_len = match writer.admit_put(
+            "missing-length.bin",
+            PutOptions::default(),
+            WriteMode::SinglePart,
+        ) {
+            Ok(_) => panic!("missing content_length must be refused at admission"),
+            Err(err) => err,
+        };
+        assert_eq!(missing_len.kind(), ExtensionErrorKind::LengthRequired);
+
+        let too_large = match writer.admit_put(
+            "too-large.bin",
+            PutOptions {
+                content_length: Some(over_limit),
+                ..PutOptions::default()
+            },
+            WriteMode::SinglePart,
+        ) {
+            Ok(_) => panic!("content_length above 5 GiB must be refused at admission"),
+            Err(err) => err,
+        };
+        assert_eq!(too_large.kind(), ExtensionErrorKind::LengthLimit);
+
+        let secret_header = "secret-header-value\r\nx-injected: 1";
+        let mut bad_meta = BTreeMap::new();
+        bad_meta.insert("note".to_string(), secret_header.to_string());
+        let bad_header = match writer.admit_put(
+            "bad-meta.bin",
+            PutOptions {
+                content_length: Some(4),
+                metadata: bad_meta,
+                ..PutOptions::default()
+            },
+            WriteMode::SinglePart,
+        ) {
+            Ok(_) => panic!("control bytes in user metadata must fail at admission"),
+            Err(err) => err,
+        };
+        assert_eq!(bad_header.kind(), ExtensionErrorKind::InvalidRequest);
+        let cause = bad_header.cause().expect("canonical cause retained");
+        assert!(!cause.to_string().contains("secret-header-value"));
+        assert!(!format!("{cause:?}").contains("secret-header-value"));
+    }
+
+    #[tokio::test]
+    async fn read_response_extracts_receipt_and_metadata_from_single_get_without_head() {
+        let current_http = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Length: 5\r\n",
+            "Content-Type: application/json\r\n",
+            "ETag: \"etag-cur\"\r\n",
+            "x-amz-version-id: ver-cur\r\n",
+            "x-amz-meta-owner: storage-ops\r\n",
+            "\r\n",
+            "hello"
+        );
+        let (endpoint, server_task) = scripted_response_server(current_http).await;
+        let provider = S3Provider::from_config(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                root_prefix: Some("tenant-secret-root".to_string()),
+                region: Some("us-east-1".to_string()),
+                endpoint: Some(endpoint),
+                force_path_style: Some(true),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::InlineStatic {
+                values: test_credentials(),
+            },
+        })
+        .await
+        .expect("provider builds");
+
+        let reader_ext = provider
+            .read_responses()
+            .expect("S3 provider exposes read_responses");
+        let support = reader_ext.read_support();
+        assert!(support.current());
+        assert!(support.native_version());
+        assert!(support.validator_match());
+
+        let response = reader_ext
+            .read_response(
+                ReadRequest::Current("docs/item.json".to_string()),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect("current read_response succeeds");
+        let raw_req =
+            String::from_utf8_lossy(&server_task.await.expect("server completes")).into_owned();
+        assert!(raw_req.starts_with("GET /bucket/tenant-secret-root/docs/item.json"));
+
+        let (mut stream, receipt, enforcement, metadata) = response.into_parts();
+        assert_eq!(enforcement, ReadEnforcement::Unguarded);
+        assert_eq!(receipt.path, "docs/item.json");
+        assert_eq!(receipt.native_version.as_deref(), Some("ver-cur"));
+        assert_eq!(receipt.validator.as_deref(), Some("\"etag-cur\""));
+        assert_eq!(receipt.total_size, Some(5));
+        assert!(matches!(
+            metadata.content_type(),
+            Evidence::Available(Some(ct)) if ct == "application/json"
+        ));
+        assert!(matches!(
+            metadata.user_metadata(),
+            Evidence::Available(map) if map.get("owner").map(String::as_str) == Some("storage-ops")
+        ));
+        let mut payload = Vec::new();
+        stream
+            .read_to_end(&mut payload)
+            .await
+            .expect("payload reads");
+        assert_eq!(payload, b"hello");
+
+        // Guarded read_response uses one HEAD (observe_source) + one selected GET (no extra HEAD inside read_response).
+        const RESPONSES: &[&str] = &[
+            concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "Content-Length: 6\r\n",
+                "ETag: \"etag-v2\"\r\n",
+                "x-amz-version-id: ver-2\r\n",
+                "\r\n"
+            ),
+            concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "Content-Length: 6\r\n",
+                "ETag: \"etag-v2\"\r\n",
+                "x-amz-version-id: ver-2\r\n",
+                "\r\n",
+                "pinned"
+            ),
+        ];
+        let (guarded_endpoint, guarded_server) = scripted_responses_server(RESPONSES).await;
+        let guarded_provider = scripted_provider(guarded_endpoint).await;
+        let observed = guarded_provider
+            .observe_source("pinned.txt")
+            .await
+            .expect("observe_source succeeds");
+        let selection = guarded_provider
+            .bind_guarded_read(
+                "pinned.txt",
+                SourceSelector::ValidatorMatch {
+                    token: observed.receipt.validator.expect("validator observed"),
+                },
+            )
+            .expect("validator selector builds");
+
+        let guarded_resp = guarded_provider
+            .read_responses()
+            .expect("read_responses present")
+            .read_response(
+                ReadRequest::Guarded(selection),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect("guarded read_response succeeds");
+        let recorded_reqs = guarded_server.await.expect("server completes");
+        assert_eq!(recorded_reqs.len(), 2);
+        let second_req = String::from_utf8_lossy(&recorded_reqs[1]);
+        assert!(second_req.starts_with("GET /bucket/pinned.txt"));
+        assert!(second_req
+            .to_ascii_lowercase()
+            .contains("if-match: \"etag-v2\""));
+
+        let (mut guarded_stream, guarded_receipt, guarded_enforcement, guarded_meta) =
+            guarded_resp.into_parts();
+        assert_eq!(guarded_enforcement, ReadEnforcement::ValidatorMatch);
+        assert_eq!(guarded_receipt.validator.as_deref(), Some("\"etag-v2\""));
+        assert!(matches!(
+            guarded_meta.content_type(),
+            Evidence::Available(None)
+        ));
+        assert!(matches!(
+            guarded_meta.user_metadata(),
+            Evidence::Available(map) if map.is_empty()
+        ));
+        let mut guarded_bytes = Vec::new();
+        guarded_stream
+            .read_to_end(&mut guarded_bytes)
+            .await
+            .expect("guarded payload reads");
+        assert_eq!(guarded_bytes, b"pinned");
+    }
+
+    #[tokio::test]
+    async fn prepared_put_executes_at_most_one_sdk_attempt_and_reports_truthful_commit_knowledge() {
+        // 1. 500 InternalError: listener stays open for the entire operation; verify a retry-enabled
+        // negative control with replayable 0-byte body retries >= 2 times, whereas S3PreparedPut
+        // (both replayable 0-byte body and streamed 4-byte body) makes exactly 1 attempt.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let addr = listener.local_addr().expect("local addr");
+        let attempts_500 = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempts_500_clone = attempts_500.clone();
+        let stop_500 = Arc::new(tokio::sync::Notify::new());
+        let stop_500_clone = stop_500.clone();
+        let server_500 = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = stop_500_clone.notified() => break,
+                    accepted = listener.accept() => {
+                        let Ok((mut socket, _)) = accepted else { break };
+                        attempts_500_clone.fetch_add(1, Ordering::SeqCst);
+                        let mut buf = [0_u8; 4096];
+                        let _ = socket.read(&mut buf).await;
+                        let xml_500 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>InternalError</Code><Message>internal</Message></Error>";
+                        let resp = format!(
+                            "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            xml_500.len(),
+                            xml_500
+                        );
+                        let _ = socket.write_all(resp.as_bytes()).await;
+                    }
+                }
+            }
+        });
+
+        let provider_500 = scripted_provider(format!("http://{addr}")).await;
+        // Negative control: default retry-enabled client with a replayable empty body retries >= 2 times.
+        let _ = provider_500
+            .client
+            .put_object()
+            .bucket("bucket")
+            .key("retry-control.bin")
+            .content_length(0)
+            .body(ByteStream::from_static(&[]))
+            .send()
+            .await
+            .expect_err("500 must fail even after SDK retries");
+        let control_attempts = attempts_500.swap(0, Ordering::SeqCst);
+        assert!(
+            control_attempts >= 2,
+            "retry-enabled control client must retry replayable 0-byte PUT (got {control_attempts})"
+        );
+
+        // Replayable 0-byte admitted PUT: ByteStream::from_static(&[]), yet max_attempts = 1 -> 1 attempt.
+        let prepared_zero_500 = provider_500
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "once-empty.bin",
+                PutOptions {
+                    content_length: Some(0),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .expect("admitted");
+        let fail_zero_500 = prepared_zero_500
+            .execute(
+                Box::new(Cursor::new(Vec::new())),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("500 must fail");
+        assert_eq!(attempts_500.swap(0, Ordering::SeqCst), 1);
+        assert_eq!(fail_zero_500.commit(), CommitKnowledge::Unknown);
+
+        // Streamed 4-byte admitted PUT: 1 attempt, CommitKnowledge::Unknown.
+        let prepared_500 = provider_500
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "once.bin",
+                PutOptions {
+                    content_length: Some(4),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .expect("admitted");
+        let fail_500 = prepared_500
+            .execute(
+                Box::new(Cursor::new(b"data".to_vec())),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("500 must fail");
+        stop_500.notify_one();
+        server_500.await.expect("server completes");
+        assert_eq!(attempts_500.load(Ordering::SeqCst), 1);
+        assert_eq!(fail_500.commit(), CommitKnowledge::Unknown);
+
+        // 2. Lost response (connection closed after full request read): 1 attempt, CommitKnowledge::Unknown, no DELETE.
+        let drop_listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let drop_addr = drop_listener.local_addr().expect("local addr");
+        let drop_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let drop_attempts_clone = drop_attempts.clone();
+        let stop_drop = Arc::new(tokio::sync::Notify::new());
+        let stop_drop_clone = stop_drop.clone();
+        let drop_server = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = stop_drop_clone.notified() => break,
+                    accepted = drop_listener.accept() => {
+                        let Ok((mut socket, _)) = accepted else { break };
+                        drop_attempts_clone.fetch_add(1, Ordering::SeqCst);
+                        let mut buf = [0_u8; 4096];
+                        let _ = socket.read(&mut buf).await;
+                        drop(socket);
+                    }
+                }
+            }
+        });
+
+        let drop_provider = scripted_provider(format!("http://{drop_addr}")).await;
+        let prepared_drop = drop_provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "lost-ack.bin",
+                PutOptions {
+                    content_length: Some(0),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .expect("admitted");
+        let fail_drop = prepared_drop
+            .execute(
+                Box::new(Cursor::new(Vec::new())),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("dropped response must fail");
+        stop_drop.notify_one();
+        drop_server.await.expect("drop server completes");
+        assert_eq!(drop_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(fail_drop.commit(), CommitKnowledge::Unknown);
+
+        // 3. 412 PreconditionFailed: 1 attempt, CommitKnowledge::NotCommitted, ConflictKind::AlreadyExists, root_prefix redacted.
+        let precond_xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>PreconditionFailed</Code><Message>conflict</Message></Error>";
+        let precond_http = format!(
+            "HTTP/1.1 412 Precondition Failed\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            precond_xml.len(),
+            precond_xml
+        );
+        let (precond_endpoint, precond_server) = scripted_response_server(precond_http).await;
+        let rooted_provider = S3Provider::from_config(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                root_prefix: Some("private-root-sentinel".to_string()),
+                region: Some("us-east-1".to_string()),
+                endpoint: Some(precond_endpoint),
+                force_path_style: Some(true),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::InlineStatic {
+                values: test_credentials(),
+            },
+        })
+        .await
+        .expect("provider builds");
+        let prepared_precond = rooted_provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "guarded.bin",
+                PutOptions {
+                    content_length: Some(4),
+                    precondition: PutPrecondition::MustNotExist,
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .expect("admitted");
+        let fail_precond = prepared_precond
+            .execute(
+                Box::new(Cursor::new(b"data".to_vec())),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("412 must fail");
+        let _ = precond_server.await.expect("precond server completes");
+        let (commit, ext_err) = fail_precond.into_parts();
+        assert_eq!(commit, CommitKnowledge::NotCommitted);
+        let cause = ext_err.cause().expect("canonical conflict cause retained");
+        assert!(matches!(
+            cause,
+            StorageError::Conflict {
+                kind: ConflictKind::AlreadyExists,
+                ..
+            }
+        ));
+        assert!(!cause.to_string().contains("private-root-sentinel"));
+        assert!(!format!("{cause:?}").contains("private-root-sentinel"));
+    }
+
+    #[tokio::test]
+    async fn prepared_put_withholds_overlong_payload_and_honors_operation_control() {
+        let provider = scripted_provider("http://127.0.0.1:9".to_string()).await;
+        let writer = provider.admitted_puts().unwrap();
+
+        // Cancelled control before dispatch -> NotStarted without polling body or opening socket.
+        let cancel = storageprims_core::Cancellation::new();
+        cancel.cancel();
+        let stopped_control =
+            OperationControl::new(Instant::now() + Duration::from_secs(5), cancel);
+        let prepared_stopped = writer
+            .admit_put(
+                "stopped.bin",
+                PutOptions {
+                    content_length: Some(4),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .expect("admitted");
+        let stopped_err = prepared_stopped
+            .execute(Box::new(PanicOnPollReader), stopped_control)
+            .await
+            .expect_err("cancelled control must fail before dispatch");
+        assert_eq!(stopped_err.commit(), CommitKnowledge::NotStarted);
+        assert_eq!(stopped_err.error().kind(), ExtensionErrorKind::Cancelled);
+
+        // Zero-length overlong stream fails pre-dispatch with NotStarted and zero network calls.
+        let prepared_zero = writer
+            .admit_put(
+                "zero.bin",
+                PutOptions {
+                    content_length: Some(0),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .expect("admitted");
+        let zero_err = prepared_zero
+            .execute(
+                Box::new(Cursor::new(b"x".to_vec())),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("non-empty body for zero content_length must fail before dispatch");
+        assert_eq!(zero_err.commit(), CommitKnowledge::NotStarted);
+        assert_eq!(zero_err.error().kind(), ExtensionErrorKind::InvalidRequest);
+
+        // Non-zero overlong stream aborts before delivering the final chunk onto the socket.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let addr = listener.local_addr().expect("local addr");
+        let wire_capture = tokio::spawn(async move {
+            let Ok(Ok((mut socket, _))) =
+                tokio::time::timeout(Duration::from_millis(300), listener.accept()).await
+            else {
+                return Vec::new();
+            };
+            let mut received = Vec::new();
+            let mut buf = [0_u8; 4096];
+            while let Ok(Ok(n)) =
+                tokio::time::timeout(Duration::from_millis(150), socket.read(&mut buf)).await
+            {
+                if n == 0 {
+                    break;
+                }
+                received.extend_from_slice(&buf[..n]);
+            }
+            received
+        });
+
+        let live_provider = scripted_provider(format!("http://{addr}")).await;
+        let prepared_overlong = live_provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "overlong.bin",
+                PutOptions {
+                    content_length: Some(5),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .expect("admitted");
+        let overlong_err = prepared_overlong
+            .execute(
+                Box::new(Cursor::new(b"123456".to_vec())),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("overlong stream must abort");
+        assert_eq!(
+            overlong_err.error().kind(),
+            ExtensionErrorKind::InvalidRequest
+        );
+        let wire_bytes = wire_capture.await.expect("wire capture completes");
+        if let Some(pos) = wire_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+            let wire_body = &wire_bytes[pos + 4..];
+            assert!(
+                wire_body.len() < 5,
+                "overlong body must never flush full declared Content-Length bytes onto wire"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn prepared_put_service_error_preserves_recorded_abort_and_rooted_errors_stay_relative() {
+        use aws_sdk_s3::operation::put_object::PutObjectError;
+
+        let control = active_control(Duration::from_secs(5));
+        let incomplete = classify_prepared_put_error(
+            Some("item.bin"),
+            Some("bucket"),
+            PutPreconditionKind::None,
+            Some(BodyAbort::ShortStream),
+            &control,
+            aws_sdk_s3::error::SdkError::service_error(
+                PutObjectError::generic(ErrorMetadata::builder().code("IncompleteBody").build()),
+                Response::new(
+                    StatusCode::try_from(400).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+        assert_eq!(incomplete.commit(), CommitKnowledge::NotCommitted);
+        assert_eq!(
+            incomplete.error().kind(),
+            ExtensionErrorKind::InvalidRequest
+        );
+
+        let server_fault_after_abort = classify_prepared_put_error(
+            Some("item.bin"),
+            Some("bucket"),
+            PutPreconditionKind::None,
+            Some(BodyAbort::ShortStream),
+            &control,
+            aws_sdk_s3::error::SdkError::service_error(
+                PutObjectError::generic(ErrorMetadata::builder().code("InternalError").build()),
+                Response::new(
+                    StatusCode::try_from(500).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+        assert_eq!(server_fault_after_abort.commit(), CommitKnowledge::Unknown);
+        assert_eq!(
+            server_fault_after_abort.error().kind(),
+            ExtensionErrorKind::InvalidRequest
+        );
+
+        let denied = classify_prepared_put_error(
+            Some("item.bin"),
+            Some("bucket"),
+            PutPreconditionKind::None,
+            Some(BodyAbort::ShortStream),
+            &control,
+            aws_sdk_s3::error::SdkError::service_error(
+                PutObjectError::generic(ErrorMetadata::builder().code("AccessDenied").build()),
+                Response::new(
+                    StatusCode::try_from(403).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+        assert_eq!(denied.commit(), CommitKnowledge::NotCommitted);
+        assert_eq!(denied.error().kind(), ExtensionErrorKind::Provider);
+        assert!(matches!(
+            denied.error().cause(),
+            Some(StorageError::AccessDenied { .. })
+        ));
+
+        const NOT_FOUND_HTTP: &str =
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (endpoint, _task) = scripted_response_server(NOT_FOUND_HTTP).await;
+        let rooted = S3Provider::from_config(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                root_prefix: Some("private-root-sentinel".to_string()),
+                region: Some("us-east-1".to_string()),
+                endpoint: Some(endpoint),
+                force_path_style: Some(true),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::InlineStatic {
+                values: test_credentials(),
+            },
+        })
+        .await
+        .expect("provider builds");
+        let head_err = rooted
+            .head("nested/item.txt")
+            .await
+            .expect_err("404 must map to NotFound");
+        let rendered = format!("{head_err} | {head_err:?}");
+        assert!(
+            !rendered.contains("private-root-sentinel"),
+            "rooted head error must omit root_prefix: {rendered}"
+        );
+        assert!(matches!(
+            head_err,
+            StorageError::NotFound { ref path, .. } if path == "nested/item.txt"
+        ));
+
+        // Rooted native copy & cross-bucket relay copy must also omit root_prefix across Display, Debug, and source chain.
+        let (copy_endpoint, _copy_task) = scripted_owned_responses_server(vec![
+            NOT_FOUND_HTTP.to_string(),
+            NOT_FOUND_HTTP.to_string(),
+        ])
+        .await;
+        let rooted_copy = S3Provider::from_config(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some("bucket".to_string()),
+                root_prefix: Some("private-root-sentinel".to_string()),
+                region: Some("us-east-1".to_string()),
+                endpoint: Some(copy_endpoint),
+                force_path_style: Some(true),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::InlineStatic {
+                values: test_credentials(),
+            },
+        })
+        .await
+        .expect("provider builds");
+
+        for (label, dst) in [
+            ("native", "nested/output.txt".to_string()),
+            ("relay", "s3://other-bucket/remote/output.txt".to_string()),
+        ] {
+            let err = rooted_copy
+                .copy(CopyRequest {
+                    source: "nested/source.txt".to_string(),
+                    destination: dst,
+                })
+                .await
+                .expect_err("missing copy object must fail");
+            let mut chain = format!("{err} | {err:?}");
+            let mut cur = std::error::Error::source(&err);
+            while let Some(src) = cur {
+                chain.push_str(&format!(" | {src} | {src:?}"));
+                cur = src.source();
+            }
+            assert!(
+                !chain.contains("private-root-sentinel"),
+                "rooted {label} copy error leaked root_prefix: {chain}"
+            );
+        }
+
+        // x-amz-missing-meta != 0 must surface user_metadata as Evidence::Unavailable.
+        const MISSING_META_GET: &str = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Length: 2\r\n",
+            "Content-Type: text/plain\r\n",
+            "ETag: \"m1\"\r\n",
+            "x-amz-missing-meta: 1\r\n",
+            "x-amz-meta-present: ok\r\n",
+            "Connection: close\r\n",
+            "\r\n",
+            "hi"
+        );
+        let (mm_endpoint, _mm_task) = scripted_response_server(MISSING_META_GET).await;
+        let mm_provider = scripted_provider(mm_endpoint).await;
+        let mm_resp = mm_provider
+            .read_responses()
+            .unwrap()
+            .read_response(
+                ReadRequest::Current("meta.txt".to_string()),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect("GET succeeds");
+        assert!(matches!(
+            mm_resp.metadata().content_type(),
+            Evidence::Available(Some(ct)) if ct == "text/plain"
+        ));
+        assert!(matches!(
+            mm_resp.metadata().user_metadata(),
+            Evidence::Unavailable
+        ));
+    }
+
+    #[tokio::test]
+    async fn put_header_validation_and_prepared_put_edge_classifications_are_covered() {
+        use aws_sdk_s3::operation::put_object::PutObjectError;
+
+        let (idle_endpoint, _idle_task) = scripted_response_server(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        let provider = scripted_provider(idle_endpoint).await;
+
+        // 1. Case-colliding user metadata rejected in both admit_put and legacy put.
+        let colliding_meta = BTreeMap::from([
+            ("Alpha".to_string(), "1".to_string()),
+            ("alpha".to_string(), "2".to_string()),
+        ]);
+        let admit_collide = provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "item.bin",
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: colliding_meta.clone(),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .err()
+            .expect("case-colliding metadata must fail admission");
+        assert_eq!(admit_collide.kind(), ExtensionErrorKind::InvalidRequest);
+        let put_collide = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: colliding_meta,
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("case-colliding metadata must fail legacy put");
+        assert!(matches!(
+            put_collide,
+            StorageError::InvalidArgument { ref argument, .. } if argument == "metadata"
+        ));
+
+        // 2. Empty metadata key rejected in both admit_put and legacy put.
+        let empty_key_meta = BTreeMap::from([("".to_string(), "value".to_string())]);
+        let admit_empty_key = provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "item.bin",
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: empty_key_meta.clone(),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .err()
+            .expect("empty metadata key must fail admission");
+        assert_eq!(admit_empty_key.kind(), ExtensionErrorKind::InvalidRequest);
+        let put_empty_key = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: empty_key_meta,
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("empty metadata key must fail legacy put");
+        assert!(matches!(
+            put_empty_key,
+            StorageError::InvalidArgument { ref argument, .. } if argument == "metadata"
+        ));
+
+        // 3. Non-ASCII (>= 0x80) bytes in content_type and metadata values rejected without echoing caller bytes.
+        let secret_non_ascii_ct = "text/plain; tag=secret-\u{00e9}-ct";
+        let ct_err = provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "item.bin",
+                PutOptions {
+                    content_length: Some(0),
+                    content_type: Some(secret_non_ascii_ct.to_string()),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .err()
+            .expect("non-ASCII content_type must fail admission");
+        assert_eq!(ct_err.kind(), ExtensionErrorKind::InvalidRequest);
+        let ct_rendered = format!("{ct_err} | {ct_err:?}");
+        assert!(!ct_rendered.contains("secret-"));
+
+        let secret_non_ascii_val = "secret-\u{00e9}-meta";
+        let meta_non_ascii_err = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(0),
+                    metadata: BTreeMap::from([("k".to_string(), secret_non_ascii_val.to_string())]),
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("non-ASCII metadata value must fail legacy put");
+        let meta_rendered = format!("{meta_non_ascii_err} | {meta_non_ascii_err:?}");
+        assert!(!meta_rendered.contains("secret-"));
+
+        // 4. Legacy put exact 5 GiB boundary: S3_MAX_SINGLE_PUT_BYTES passes the ceiling check
+        // (reaching precondition.match validation), while S3_MAX_SINGLE_PUT_BYTES + 1 fails on content_length.
+        let at_limit = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(S3_MAX_SINGLE_PUT_BYTES),
+                    precondition: PutPrecondition::Match {
+                        token: "not-a-valid-etag".to_string(),
+                    },
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("invalid match token must fail after passing 5 GiB check");
+        assert!(matches!(
+            at_limit,
+            StorageError::InvalidArgument { ref argument, .. } if argument == "precondition.match"
+        ));
+        let over_limit = provider
+            .put(
+                "item.bin",
+                Box::new(tokio::io::empty()),
+                PutOptions {
+                    content_length: Some(S3_MAX_SINGLE_PUT_BYTES + 1),
+                    precondition: PutPrecondition::Match {
+                        token: "not-a-valid-etag".to_string(),
+                    },
+                    ..PutOptions::default()
+                },
+            )
+            .await
+            .expect_err("5 GiB + 1 must fail on content_length");
+        assert!(matches!(
+            over_limit,
+            StorageError::InvalidArgument { ref argument, .. } if argument == "content_length"
+        ));
+
+        // 5. classify_prepared_put_error: ConstructionFailure -> NotStarted, 408 -> Unknown.
+        let control = active_control(Duration::from_secs(5));
+        let construction_failure = classify_prepared_put_error::<PutObjectError>(
+            Some("item.bin"),
+            Some("bucket"),
+            PutPreconditionKind::None,
+            None,
+            &control,
+            aws_sdk_s3::error::SdkError::construction_failure(std::io::Error::other(
+                "sensitive-header-token",
+            )),
+        );
+        assert_eq!(construction_failure.commit(), CommitKnowledge::NotStarted);
+        assert_eq!(
+            construction_failure.error().kind(),
+            ExtensionErrorKind::InvalidRequest
+        );
+        let cf_rendered = format!("{construction_failure:?}");
+        assert!(!cf_rendered.contains("sensitive-header-token"));
+
+        let timeout_408 = classify_prepared_put_error(
+            Some("item.bin"),
+            Some("bucket"),
+            PutPreconditionKind::None,
+            None,
+            &control,
+            aws_sdk_s3::error::SdkError::service_error(
+                PutObjectError::generic(ErrorMetadata::builder().code("RequestTimeout").build()),
+                Response::new(
+                    StatusCode::try_from(408).expect("valid status"),
+                    SdkBody::empty(),
+                ),
+            ),
+        );
+        assert_eq!(timeout_408.commit(), CommitKnowledge::Unknown);
+
+        // 6. finalize_prepared_put_ok + scripted early 200 OK before reading admitted content_length.
+        let ack_after_abort = finalize_prepared_put_ok(
+            "item.bin".to_string(),
+            4,
+            Some("\"e1\"".to_string()),
+            Some(BodyAbort::OverlongStream),
+            4,
+            &control,
+        )
+        .expect_err("recorded abort after 200 ack must report Committed failure");
+        assert_eq!(ack_after_abort.commit(), CommitKnowledge::Committed);
+        assert_eq!(
+            ack_after_abort.error().kind(),
+            ExtensionErrorKind::InvalidRequest
+        );
+
+        let early_ack_unit = finalize_prepared_put_ok(
+            "item.bin".to_string(),
+            8,
+            Some("\"e2\"".to_string()),
+            None,
+            3,
+            &control,
+        )
+        .expect_err("short delivered count after 200 ack must report Committed failure");
+        assert_eq!(early_ack_unit.commit(), CommitKnowledge::Committed);
+        assert_eq!(early_ack_unit.error().kind(), ExtensionErrorKind::Provider);
+
+        struct StalledAfterPrefix {
+            prefix: &'static [u8],
+            emitted: bool,
+        }
+        impl AsyncRead for StalledAfterPrefix {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                buf: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                if !self.emitted {
+                    self.emitted = true;
+                    buf.put_slice(self.prefix);
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let early_server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.expect("accept");
+            let mut hdr = [0_u8; 1024];
+            let _ = sock.read(&mut hdr).await;
+            let _ = sock
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nETag: \"early\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            let _ = sock.shutdown().await;
+        });
+        let early_provider = scripted_provider(format!("http://{addr}")).await;
+        let prepared_early = early_provider
+            .admitted_puts()
+            .unwrap()
+            .admit_put(
+                "early.bin",
+                PutOptions {
+                    content_length: Some(16),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .expect("admitted");
+        let early_wire_err = prepared_early
+            .execute(
+                Box::new(StalledAfterPrefix {
+                    prefix: b"abcd",
+                    emitted: false,
+                }),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("early 200 before full body must fail");
+        assert_eq!(early_wire_err.commit(), CommitKnowledge::Committed);
+        assert_eq!(early_wire_err.error().kind(), ExtensionErrorKind::Provider);
+        early_server.await.expect("early server joins");
+
+        // 7. read_response(Current): 405 with x-amz-delete-marker: true -> NotFound; 405 without delete marker -> Other.
+        const DELETE_MARKER_405: &str = concat!(
+            "HTTP/1.1 405 Method Not Allowed\r\n",
+            "x-amz-delete-marker: true\r\n",
+            "Content-Length: 0\r\n",
+            "Connection: close\r\n",
+            "\r\n"
+        );
+        const PLAIN_405: &str = concat!(
+            "HTTP/1.1 405 Method Not Allowed\r\n",
+            "Content-Length: 0\r\n",
+            "Connection: close\r\n",
+            "\r\n"
+        );
+        let (dm_endpoint, _dm_task) = scripted_owned_responses_server(vec![
+            DELETE_MARKER_405.to_string(),
+            PLAIN_405.to_string(),
+        ])
+        .await;
+        let dm_provider = scripted_provider(dm_endpoint).await;
+        let dm_err = dm_provider
+            .read_responses()
+            .unwrap()
+            .read_response(
+                ReadRequest::Current("deleted.txt".to_string()),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("405 delete marker must fail");
+        assert!(matches!(
+            dm_err.cause(),
+            Some(StorageError::NotFound { ref path, .. }) if path == "deleted.txt"
+        ));
+
+        let plain_405_err = dm_provider
+            .read_responses()
+            .unwrap()
+            .read_response(
+                ReadRequest::Current("method.txt".to_string()),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .expect_err("plain 405 must fail");
+        assert!(matches!(
+            plain_405_err.cause(),
+            Some(StorageError::Other { .. })
+        ));
     }
 }

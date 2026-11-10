@@ -15,6 +15,9 @@ publish = true
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+integration = []
+
 [dependencies]
 storageprims-core.workspace = true
 serde.workspace = true
@@ -22,7 +25,10 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+aws-credential-types.workspace = true
+aws-sdk-s3.workspace = true
 bytes.workspace = true
+storageprims-local.workspace = true
 storageprims-s3.workspace = true
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["io"] }

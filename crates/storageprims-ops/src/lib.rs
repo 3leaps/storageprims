@@ -1,5 +1,12 @@
 //! Higher-level provider-agnostic operations composed from storageprims-core.
 
+pub mod relay;
+mod relay_reader;
+pub use relay::{
+    relay_copy, MetadataPolicy, RelayRequest, TransferBudget, TransferFailure, TransferFailureKind,
+    TransferReceipt,
+};
+
 use std::collections::{BTreeSet, VecDeque};
 use std::time::Duration;
 

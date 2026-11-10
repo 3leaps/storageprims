@@ -292,4 +292,51 @@ mod tests {
         assert!(payload.get("body").is_none());
         unsafe { crate::storageprims_free_string(detail) };
     }
+
+    #[test]
+    fn entries_is_an_additive_dimension_with_unchanged_other_numeric_code() {
+        let error = StorageError::Inspection {
+            provider: Some(ProviderKind::Local),
+            operation: StorageOperation::List,
+            kind: InspectionKind::LimitExceeded,
+            limit_dimension: Some(InspectionLimitDimension::Entries),
+            configured_limit: 100000,
+            consumed: 100001,
+        };
+        let code = set_error(&error);
+        assert_eq!(code, StorageprimsErrorCode::Other);
+        assert_eq!(code as i32, 99);
+        let detail = storageprims_last_error();
+        let value = unsafe { CStr::from_ptr(detail).to_str().expect("valid utf-8") };
+        let payload: serde_json::Value = serde_json::from_str(value).unwrap();
+        assert_eq!(payload["inspection_version"], 1);
+        assert_eq!(payload["inspection_kind"], "limit_exceeded");
+        assert_eq!(payload["limit_dimension"], "entries");
+        assert_eq!(payload["configured_limit"], 100000);
+        assert_eq!(payload["consumed"], 100001);
+        assert!(payload.get("selector").is_none());
+        assert!(payload.get("body").is_none());
+        unsafe { crate::storageprims_free_string(detail) };
+    }
+
+    #[test]
+    fn all_existing_numeric_error_projections_remain_stable() {
+        assert_eq!(StorageprimsErrorCode::Ok as i32, 0);
+        for (core, numeric) in [
+            (StorageErrorCode::InvalidUri, 1),
+            (StorageErrorCode::InvalidArgument, 2),
+            (StorageErrorCode::NotFound, 3),
+            (StorageErrorCode::ContainerNotFound, 4),
+            (StorageErrorCode::AccessDenied, 5),
+            (StorageErrorCode::InvalidCredentials, 6),
+            (StorageErrorCode::Throttled, 7),
+            (StorageErrorCode::ProviderUnavailable, 8),
+            (StorageErrorCode::UnsupportedCapability, 9),
+            (StorageErrorCode::Conflict, 10),
+            (StorageErrorCode::Io, 11),
+            (StorageErrorCode::Other, 99),
+        ] {
+            assert_eq!(StorageprimsErrorCode::from(core) as i32, numeric);
+        }
+    }
 }

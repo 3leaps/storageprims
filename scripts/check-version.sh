@@ -67,7 +67,7 @@ while IFS= read -r line; do
 		failed=1
 	fi
 done < <(
-	grep -E '^storageprims-(core|ops|s3|ffi) = \{ version = "' "$CARGO_TOML" || true
+	grep -E '^storageprims-(core|local|ops|s3|ffi) = \{ version = "' "$CARGO_TOML" || true
 )
 
 if [[ "$failed" -ne 0 ]]; then
