@@ -60,7 +60,8 @@ Practical notes:
   [Keys](local-provider.md#keys)); the local provider refuses keys S3 would
   accept, which surfaces non-portable keys in tests rather than in production.
 - Always set `content_length` on `put`. The S3 provider requires it; the local
-  provider does not, so a test that omits it would pass locally and fail on S3.
+  provider's plain `put` does not, so a test that omits it would pass locally
+  and fail on S3.
 
 ## What a local test does not prove
 
@@ -68,14 +69,14 @@ The local provider implements the same contract, but not every optional feature
 or every failure an S3 endpoint can produce. Keep a smaller suite against
 S3 (or an S3-compatible emulator such as LocalStack) for:
 
-| Behaviour                                                         | Why local tests cannot cover it                                          |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `content_type` and user metadata                                  | Local refuses them; code that sets them must be tested against S3        |
-| `PutPrecondition::Match` and ETags                                | Local has no validators; `etag` is `None`                                |
-| Guarded reads and the `storageprims-ops` line and preview helpers | Local does not offer guarded reads                                       |
-| Credentials, access denied, throttling, network failure           | Local has no authentication or network path                              |
-| Objects over 5 GiB, single-put limits                             | S3 limits single puts to 5 GiB; local does not                           |
-| Delimiters other than `/`, empty directory prefixes               | Local accepts only `/`, and reports empty directories as common prefixes |
+| Behaviour                                                         | Why local tests cannot cover it                                                                             |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `content_type` and user metadata                                  | Local refuses them; code that sets them must be tested against S3                                           |
+| `PutPrecondition::Match` and ETags                                | Local has no validators; `etag` is `None`                                                                   |
+| Guarded reads and the `storageprims-ops` line and preview helpers | Local does not offer guarded reads                                                                          |
+| Credentials, access denied, throttling, network failure           | Local has no authentication or network path                                                                 |
+| Objects over 5 GiB, single-put limits                             | S3 limits single puts to 5 GiB; local does not                                                              |
+| Delimiters other than `/`, empty directory prefixes               | Local accepts only `/`, and keeps reporting a directory as a common prefix after its last object is deleted |
 
 A useful split is many fast tests against `LocalProvider` for application logic,
 plus a few tests per provider feature against the real backend.

@@ -8,8 +8,8 @@
 //! ```
 //!
 //! Or pass a destination URI, for example `file:///tmp/exports` (the directory
-//! must exist) or `s3://my-bucket/exports` (uses the AWS default credential
-//! chain):
+//! must exist; `file://` URIs take Unix-style absolute paths) or
+//! `s3://my-bucket/exports` (uses the AWS default credential chain):
 //!
 //! ```text
 //! cargo run -p storageprims-ops --example portable_store -- s3://my-bucket/exports
@@ -98,21 +98,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&staging_root)?;
     std::fs::create_dir_all(&local_destination)?;
 
-    let destination_uri = match std::env::args().nth(1) {
-        Some(uri) => uri,
-        None => format!("file://{}", local_destination.display()),
-    };
-    let result = run(&staging_root, &destination_uri).await;
+    let result = run(
+        &staging_root,
+        &local_destination,
+        std::env::args().nth(1).as_deref(),
+    )
+    .await;
     std::fs::remove_dir_all(&scratch)?;
     result
 }
 
 async fn run(
     staging_root: &std::path::Path,
-    destination_uri: &str,
+    local_destination: &std::path::Path,
+    destination_uri: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let staging = LocalProvider::new(staging_root)?;
-    let destination = open_store(destination_uri).await?;
+    // With no URI, open the local destination from a native path, which works
+    // on every platform (including Windows drive paths).
+    let destination: Box<dyn StorageProvider> = match destination_uri {
+        Some(uri) => open_store(uri).await?,
+        None => Box::new(LocalProvider::new(local_destination)?),
+    };
 
     // Stage a file locally, using the same code that would write to S3.
     let created = publish_once(&staging, "export.csv", b"id,value\n1,42\n".to_vec()).await?;
@@ -127,19 +134,19 @@ async fn run(
         MetadataPolicy::None,
         budget,
     );
-    match relay_copy(&staging, destination.as_ref(), request, Cancellation::new()).await {
-        Ok(receipt) => println!(
-            "relayed {} bytes to {}",
-            receipt.destination_bytes_handed_off(),
-            destination_uri
-        ),
+    let cancel = Cancellation::new(); // keep a clone to cancel from elsewhere
+    match relay_copy(&staging, destination.as_ref(), request, cancel.clone()).await {
+        Ok(receipt) => println!("relayed {} bytes", receipt.destination_bytes_handed_off()),
         Err(failure) => match failure.commit() {
-            // The destination may or may not hold the object; check before retrying.
-            CommitKnowledge::Committed | CommitKnowledge::Unknown => {
-                return Err(format!("relay outcome needs checking: {:?}", failure.kind()).into())
+            // This attempt published nothing. Retry only if the failure is
+            // transient: an admission refusal or an existing destination will
+            // fail the same way again.
+            CommitKnowledge::NotStarted | CommitKnowledge::NotCommitted => {
+                return Err(format!("relay did not commit: {:?}", failure.kind()).into())
             }
-            // Nothing was written by this attempt.
-            _ => return Err(format!("relay did not commit: {:?}", failure.kind()).into()),
+            // Committed, Unknown, or a future variant: the destination may
+            // hold the object; check it before any retry.
+            _ => return Err(format!("relay outcome needs checking: {:?}", failure.kind()).into()),
         },
     }
 

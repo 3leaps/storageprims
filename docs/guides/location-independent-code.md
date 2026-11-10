@@ -7,8 +7,8 @@ both providers share or checking a capability first.
 
 The code in this guide comes from
 [`crates/storageprims-ops/examples/portable_store.rs`](../../crates/storageprims-ops/examples/portable_store.rs),
-which CI compiles. Run it with no argument to use temporary local directories,
-or pass `file:///existing/dir` or `s3://bucket/prefix`.
+which CI compiles. Run it with no argument to use temporary local directories
+(any platform), or pass `file:///existing/dir` or `s3://bucket/prefix`.
 
 ## 1. Choose the provider at the edge
 
@@ -35,7 +35,9 @@ async fn open_store(uri: &str) -> Result<Box<dyn StorageProvider>, StorageError>
 
 `StorageUri::parse` recognises `s3://bucket/prefix` and `file:///absolute/path`.
 `S3Provider::from_uri` uses the bucket and prefix from the URI; `LocalProvider`
-takes a filesystem path, so the example passes the parsed path. For
+takes a filesystem path, so the example passes the parsed path. `file://` URIs
+take Unix-style absolute paths only; on Windows, build the local provider with
+`LocalProvider::new(path)` from a native path instead of a URI. For
 S3-compatible endpoints (MinIO, LocalStack, others), set `TargetConfig`'s
 `endpoint`, `region` and `force_path_style`.
 
@@ -44,17 +46,20 @@ has.
 
 ## 2. Use the portable subset
 
-| Do                                                                                     | Because                                                                 |
-| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Use keys that satisfy the [local key rules](local-provider.md#keys)                    | They are valid on both providers; the local rules are the stricter ones |
-| Always set `PutOptions::content_length`                                                | S3 requires it; local accepts it                                        |
-| Treat `etag` as optional                                                               | Local never returns one                                                 |
-| Leave `content_type` and `metadata` empty unless the code checks the destination first | Local refuses them                                                      |
-| Page through `list` until `is_truncated` is false                                      | Both providers page; local pages hold at most 1000 keys                 |
-| Keep continuation tokens in memory only                                                | Local tokens are process-local                                          |
-| Match errors by variant, with a wildcard arm                                           | `StorageError` is non-exhaustive and messages are not stable            |
+| Do                                                                                                                                | Because                                                                                |
+| --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Use keys that satisfy the [local key rules](local-provider.md#keys), and keep the key plus any S3 `root_prefix` within 1024 bytes | The local rules are the stricter ones; S3 counts its prefix toward the 1024-byte limit |
+| Always set `PutOptions::content_length`                                                                                           | S3 requires it; local accepts it                                                       |
+| Treat `etag` as optional                                                                                                          | Local never returns one                                                                |
+| Leave `content_type` and `metadata` empty unless the code checks the destination first                                            | Local refuses them                                                                     |
+| Page through `list` until `is_truncated` is false                                                                                 | Both providers page; local pages hold at most 1000 keys                                |
+| Keep continuation tokens in memory only                                                                                           | Local tokens are process-local                                                         |
+| Match errors by variant, with a wildcard arm                                                                                      | `StorageError` is non-exhaustive and messages are not stable                           |
 
-A create-only write behaves the same on both providers:
+A create-only write that finds an existing key fails the same way on both
+providers. On S3, a write that races another in-flight conditional write can
+instead fail with `ConflictKind::Other`; this example returns that as an error
+for the caller to re-check:
 
 ```rust
 async fn publish_once(
@@ -108,13 +113,17 @@ let request = RelayRequest::new(
     MetadataPolicy::None,
     budget,
 );
-match relay_copy(&staging, destination.as_ref(), request, Cancellation::new()).await {
+let cancel = Cancellation::new(); // keep a clone to cancel from elsewhere
+match relay_copy(&staging, destination.as_ref(), request, cancel.clone()).await {
     Ok(receipt) => println!("relayed {} bytes", receipt.destination_bytes_handed_off()),
     Err(failure) => match failure.commit() {
-        // The destination may hold the object; check before retrying.
-        CommitKnowledge::Committed | CommitKnowledge::Unknown => { /* reconcile */ }
-        // This attempt published nothing.
-        _ => { /* safe to retry */ }
+        // This attempt published nothing. Retry only if failure.kind() is
+        // transient: an admission refusal or an existing destination will
+        // fail the same way again.
+        CommitKnowledge::NotStarted | CommitKnowledge::NotCommitted => { /* maybe retry */ }
+        // Committed, Unknown, or a future variant: the destination may hold
+        // the object; check it before any retry.
+        _ => { /* reconcile */ }
     },
 }
 ```
@@ -128,7 +137,8 @@ Notes:
 - Use `MetadataPolicy::None` when the destination is a local provider;
   `ContentTypeOnly` and `ContentTypeAndUserMetadata` are refused for
   destinations that cannot store them.
-- Cancel a transfer with the `Cancellation` handle you passed in.
+- Cancel a transfer by calling `cancel()` on a clone of the `Cancellation` you
+  passed in.
 
 ## 5. A common shape: stage locally, publish remotely
 

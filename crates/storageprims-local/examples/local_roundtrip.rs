@@ -39,11 +39,13 @@ async fn run(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // Create-only put: refused when the key already exists.
+    let second = b"second writer".to_vec();
     let attempt = store
         .put(
             "reports/2026/summary.txt",
-            Box::new(Cursor::new(b"second writer".to_vec())),
+            Box::new(Cursor::new(second.clone())),
             PutOptions {
+                content_length: Some(second.len() as u64),
                 precondition: PutPrecondition::MustNotExist,
                 ..PutOptions::default()
             },
@@ -67,7 +69,8 @@ async fn run(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let meta = store.head("reports/2026/summary.txt").await?;
     println!("read {} bytes: {}", meta.size, text.trim_end());
 
-    // Flat listing returns every object under a prefix, in key order.
+    // Flat listing returns one page (up to 1000 objects) under a prefix, in key
+    // order. Loop on `continuation_token` while `is_truncated` for more.
     let listing = store
         .list(ListOptions {
             prefix: Some("reports/".into()),

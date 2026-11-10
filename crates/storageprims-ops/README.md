@@ -2,7 +2,9 @@
 
 Provider-neutral operations built on the `storageprims-core` contracts:
 
-- `relay_copy`: bounded single-object transfer between any two providers, with
+- `relay_copy`: bounded single-object transfer between two providers (the
+  source needs `read_responses()` and the destination `admitted_puts()`; both
+  built-in providers qualify), with
   an explicit size, buffer and time budget and a commit-knowledge receipt. See
   [writing location-independent code](https://github.com/3leaps/storageprims/blob/main/docs/guides/location-independent-code.md).
 - Line-oriented helpers (`head_lines`, `tail_lines`, `mid_lines`,

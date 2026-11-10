@@ -36,7 +36,7 @@ Every provider implements `storageprims_core::StorageProvider`:
 | `copy(request)`                   | Copy an object within the same provider                                                                  |
 | `probe()`                         | Check that the configured container is reachable. It does not prove permission for individual operations |
 
-Every method returns a boxed future, so the trait is object-safe: code can hold
+Every I/O method returns a boxed future, and the trait is object-safe: code can hold
 `&dyn StorageProvider` or `Box<dyn StorageProvider>` and not know which provider
 it has. Bodies are `BoxedByteStream`, a boxed `tokio::io::AsyncRead`; for bytes in
 memory, `Box::new(std::io::Cursor::new(bytes))` is enough.
@@ -87,14 +87,18 @@ report:
 
 - `None` (default): create or replace.
 - `MustNotExist`: create only. If the key exists, `put` fails with
-  `StorageError::Conflict { kind: ConflictKind::AlreadyExists, .. }`.
+  `StorageError::Conflict { kind: ConflictKind::AlreadyExists, .. }`. On S3, a
+  write that races another in-flight conditional write to the same key can
+  instead fail with `ConflictKind::Other`; treat that as "another writer is
+  active" and check the key before deciding what to do.
 - `Match { token }`: replace only if the current object's validator equals
   `token`. A mismatch fails with `ConflictKind::TokenMismatch`.
 
 `ConditionalPut` says the provider enforces preconditions atomically, not that
 it accepts all of them. The local provider accepts `MustNotExist` but refuses
-`Match`. `AdmittedPutProvider::put_support()` reports exactly which conditions a
-provider accepts.
+`Match`. `AdmittedPutProvider::put_support()` reports which conditions a
+provider accepts; a supported condition can still fail at run time (for example
+on a local filesystem without a no-replace rename).
 
 ## Errors
 
@@ -102,18 +106,20 @@ Operations return `storageprims_core::Result<T>`, an alias for
 `Result<T, StorageError>`. Match on the variant (or on `error.code()`, a
 `StorageErrorCode`), never on the message text:
 
-| Variant                              | Typical cause                                                              |
-| ------------------------------------ | -------------------------------------------------------------------------- |
-| `InvalidUri`, `InvalidArgument`      | The request was rejected before any storage was touched                    |
-| `NotFound`, `ContainerNotFound`      | The object, or the bucket or root, does not exist                          |
-| `AccessDenied`, `InvalidCredentials` | Authorization failed                                                       |
-| `Throttled`, `ProviderUnavailable`   | Retry later, or the provider cannot serve this request here                |
-| `UnsupportedCapability`              | The provider does not offer what was asked for                             |
-| `Conflict`                           | A precondition failed; inspect `kind` (`AlreadyExists`, `TokenMismatch`)   |
-| `Inspection`                         | A bounded operation hit one of its limits (bytes, requests, entries, time) |
-| `Io`, `Other`                        | Lower-level failure                                                        |
+| Variant                              | Typical cause                                                                                                     |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `InvalidUri`, `InvalidArgument`      | The request was invalid; usually rejected before any storage was touched                                          |
+| `NotFound`, `ContainerNotFound`      | The object, or the bucket or root, does not exist                                                                 |
+| `AccessDenied`, `InvalidCredentials` | Authorization failed                                                                                              |
+| `Throttled`, `ProviderUnavailable`   | Retry later, or the provider cannot serve this request here                                                       |
+| `UnsupportedCapability`              | The provider does not offer what was asked for                                                                    |
+| `Conflict`                           | A precondition failed; inspect `kind` (`AlreadyExists`, `TokenMismatch`, `Other`)                                 |
+| `Inspection`                         | A bounded operation hit a limit (bytes, requests, entries, time) or refused content it was asked to treat as text |
+| `Io`, `Other`                        | Lower-level failure                                                                                               |
 
 `StorageError` is `#[non_exhaustive]`: include a wildcard arm when matching.
+`error.code()` maps `Inspection` to `StorageErrorCode::Other`, so match the
+variant when you need to tell inspection limits apart.
 Error messages omit credentials and the local root path.
 
 ## Commit knowledge
@@ -134,8 +140,10 @@ prove the key is absent: another writer may have created it.
 
 Plain `put` reports only success or a `StorageError`. On the local provider,
 a `put` that fails after the file was already published (for example, the
-directory sync after the rename failed on Unix) returns an `Io` error with the
-new object visible.
+directory sync after the rename failed on Unix) returns an error (normally
+`Io`) with the new object visible, and a rename that fails in an indeterminate
+way leaves visibility unknown. Use an admitted write or `relay_copy` when the
+caller must know.
 
 ## Where to go next
 

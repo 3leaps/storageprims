@@ -30,22 +30,22 @@ Part of the **3leaps prims family**:
 
 ## Implementation Status
 
-| Surface                                                     | Status                        |
-| ----------------------------------------------------------- | ----------------------------- |
-| Rust core contracts and line-oriented operations            | Implemented                   |
-| AWS S3 and S3-compatible provider                           | Implemented                   |
-| List, head, get, range get, put, delete, and S3-native copy | Implemented                   |
-| Provider-enforced conditional put                           | Implemented                   |
-| Root-prefix containment for listing and object operations   | Implemented                   |
-| C ABI control JSON and descriptor/pipe streaming            | Implemented on Unix/POSIX     |
-| Portable Rust crates on Windows                             | Implemented and native-tested |
-| Windows C ABI                                               | Planned                       |
-| Go and TypeScript bindings                                  | Planned                       |
-| Local filesystem provider (`storageprims-local`)            | Implemented (Rust)            |
-| Bounded single-object relay between providers               | Implemented (Rust)            |
-| GCS, Azure Blob, and CLI crates                             | Planned                       |
-| Multipart upload                                            | Planned                       |
-| Rust delimiter/common-prefix listing (S3 and local)         | Implemented (Rust only)       |
+| Surface                                                     | Status                                          |
+| ----------------------------------------------------------- | ----------------------------------------------- |
+| Rust core contracts and line-oriented operations            | Implemented                                     |
+| AWS S3 and S3-compatible provider                           | Implemented                                     |
+| List, head, get, range get, put, delete, and S3-native copy | Implemented                                     |
+| Provider-enforced conditional put                           | Implemented                                     |
+| Root-prefix containment for listing and object operations   | Implemented                                     |
+| C ABI control JSON and descriptor/pipe streaming            | Implemented on Unix/POSIX                       |
+| Portable Rust crates on Windows                             | Implemented and native-tested                   |
+| Windows C ABI                                               | Planned                                         |
+| Go and TypeScript bindings                                  | Planned                                         |
+| Local filesystem provider (`storageprims-local`)            | Implemented on main (Rust; first release 0.2.0) |
+| Bounded single-object relay between providers               | Implemented on main (Rust; first release 0.2.0) |
+| GCS, Azure Blob, and CLI crates                             | Planned                                         |
+| Multipart upload                                            | Planned                                         |
+| Rust delimiter/common-prefix listing (S3 and local)         | Implemented (Rust only)                         |
 
 ## Quick Start (Rust)
 
@@ -71,11 +71,12 @@ println!("{} objects", result.objects.len());
 The snippet runs inside an async `main` (the example uses `#[tokio::main]`). The
 complete, compile-checked version is
 [`crates/storageprims-s3/examples/list.rs`](crates/storageprims-s3/examples/list.rs).
+It uses the AWS SDK default credential chain; no credentials are passed in
+arguments or source code.
+
 For the local filesystem provider, see
 [`crates/storageprims-local/examples/local_roundtrip.rs`](crates/storageprims-local/examples/local_roundtrip.rs)
 and the [local provider guide](docs/guides/local-provider.md).
-It uses the AWS SDK default credential chain; no credentials are passed in
-arguments or source code.
 
 ### S3 authentication
 
