@@ -56,8 +56,9 @@ Binding the tag to `origin/main` is a maintainer step: the strict guard runs in
 the local ceremony with the maintainer's own credentials. `make release`
 stages the artifacts of the one successful push run of the tag workflow at the
 verified commit, then creates the draft with a create-only request; an
-existing release, an unprovable absence, or a partial upload stops for
-inspection without replacing anything.
+existing release or draft, an unprovable absence, or a partial upload stops
+for inspection without replacing anything. Before signatures are uploaded,
+the draft's unsigned assets must equal the verified artifacts byte for byte.
 
 After a tag workflow failure, stop and investigate before running
 `make release`. Never recreate or move a published signed tag. See the

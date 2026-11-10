@@ -16,6 +16,8 @@ tag="$(release_tag)"
 "$SCRIPT_DIR/verify-public-keys.sh" "$directory" >/dev/null
 "$SCRIPT_DIR/verify-signatures.sh" "$directory" >/dev/null
 assert_github_release_state release_base_assets
+# The draft must still hold the verified unsigned bytes that were signed.
+"$SCRIPT_DIR/release-verify-draft.sh" "$directory" >/dev/null
 
 upload_files=()
 while IFS= read -r asset; do

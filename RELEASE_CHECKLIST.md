@@ -232,24 +232,34 @@ exported publics against the anchors staged into the signed set.
    artifact release identity must name the verified tag object and commit,
    and the licenses must equal the tagged commit's
 3. Create a new draft from the staged set and upload it create-only
-   (`make release-draft`); it refuses when any release for the tag exists or
-   its absence cannot be proven
+   (`make release-draft`); it refuses when any release or draft for the tag
+   exists or its absence cannot be proven from the full release list
 4. Add the exact per-cut release notes and staged public fingerprint anchors
 5. Generate exact SHA-256 and SHA-512 manifests
 6. Sign both manifests
 7. Export and prove public verification keys copied from the tagged commit
-8. Verify once, upload the explicit provenance set, and recheck the exact
-   remote inventory
+8. Verify once, prove the draft still holds the verified unsigned bytes,
+   upload the explicit provenance set, and recheck the exact remote inventory
 
 Each minisign manifest signature may prompt for the minisign secret-key
 passphrase. The terminal identifies the manifest and prompt purpose; two
 prompts are expected when signing the two manifests. Never paste a passphrase
 or secret-key path into command receipts or release notes.
 
-If the ceremony stops after `release-draft` succeeded, do not rerun
-`make release`: the draft already exists. Resume with `make release-clean`,
-`make release-download` (which re-validates the exact draft inventory), and
-the remaining targets from `release-notes` onward.
+Recovery after a stop. Never rerun `make release` once a draft exists:
+`release-draft` refuses any existing release or draft for the tag.
+
+- Stopped after `release-draft` completed and before `release-upload` (for
+  example a signing prompt failed): run `make release-resume`. It re-stages the
+  verified workflow artifacts and `release-verify-draft` requires the one draft
+  for the tag to hold exactly those unsigned bytes before anything is signed.
+- Stopped inside `release-draft` (partial asset upload) or inside
+  `release-upload` (some signed assets uploaded): the draft inventory no longer
+  matches and `release-resume` refuses. Inspect the draft, delete it as a
+  separate explicit maintainer decision, then run `make release` again.
+
+`release-upload` also runs `release-verify-draft` before it uploads signatures,
+so a draft asset replaced after creation stops the ceremony.
 
 - [ ] Confirm the release remains a draft after upload
 - [ ] Independently download into an empty directory and verify both checksum

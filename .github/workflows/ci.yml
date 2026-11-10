@@ -198,6 +198,7 @@ jobs:
           command -v jq
           command -v cargo
           command -v rg
+          command -v yq
       - name: Install checksum-pinned Decernor for release tests
         run: |
           tool_dir="$(mktemp -d "$RUNNER_TEMP/decernor.XXXXXX")"

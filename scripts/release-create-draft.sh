@@ -31,18 +31,22 @@ main() {
 		exit 1
 	}
 	./scripts/validate-release-assets.sh "$directory" base
-	# A 404 is the only absence proof; transport or auth failures are not.
-	if gh api "repos/3leaps/storageprims/releases/tags/$tag" >/dev/null 2>"$root/$directory.draft-error"; then
-		rm -f "$root/$directory.draft-error"
-		echo 'error: a release for this tag already exists' >&2
-		exit 1
-	fi
-	grep -q 'HTTP 404' "$root/$directory.draft-error" || {
-		rm -f "$root/$directory.draft-error"
-		echo 'error: release absence is unknown' >&2
+	# Absence is proven from the full release list, which includes drafts only
+	# for a caller with push access; GET releases/tags/<tag> returns 404 for a
+	# draft and is not an absence proof. Any listing failure is not absence.
+	[[ "$(gh api repos/3leaps/storageprims --jq .permissions.push 2>/dev/null)" == true ]] || {
+		echo 'error: release absence is unknown: the GitHub identity cannot see drafts' >&2
 		exit 1
 	}
-	rm -f "$root/$directory.draft-error"
+	local existing
+	existing="$(gh api --paginate 'repos/3leaps/storageprims/releases?per_page=100' --jq '.[].tag_name')" || {
+		echo 'error: release absence is unknown: the release list could not be read' >&2
+		exit 1
+	}
+	if grep -Fxq -- "$tag" <<<"$existing"; then
+		echo 'error: a release or draft for this tag already exists; inspect it before any retry' >&2
+		exit 1
+	fi
 	notes="docs/releases/$tag.md"
 	[[ -s "$notes" && ! -L "$notes" ]] || {
 		echo 'error: tagged release notes are absent' >&2

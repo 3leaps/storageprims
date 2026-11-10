@@ -32,8 +32,10 @@ api="${STORAGEPRIMS_GITHUB_API:-https://api.github.com}"
 [[ "$api" == https://* ]] || die 'the GitHub API must be reached over https'
 
 # The token travels in a curl config on stdin, never in argv or a file.
+# --disable (first) ignores any default .curlrc / CURL_HOME configuration, and
+# no proxy from the environment is used for the authenticated request.
 ref_json="$(printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" |
-	curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 3 --config - \
+	curl --disable --noproxy '*' --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --show-error --retry 3 --config - \
 		--header 'Accept: application/vnd.github+json' \
 		"$api/repos/$repo/git/ref/tags/$tag")" || die 'remote release tag is absent'
 remote_type="$(jq -r '.object.type // empty' <<<"$ref_json")" || die 'remote tag lookup returned invalid JSON'

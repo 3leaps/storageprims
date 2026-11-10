@@ -22,7 +22,10 @@ printf '#!/usr/bin/env bash\n[[ "${FIXTURE_PIN:-ok}" == ok ]]\n' >"$repo/scripts
 cat >"$repo/scripts/validate-release-assets.sh" <<'SH'
 #!/usr/bin/env bash
 [[ "$2" == base ]]
-diff <(ls "$1") <(printf '%s\n' LICENSE-APACHE LICENSE-MIT sbom-1.2.3.cdx.json storageprims-ffi-1.2.3-linux-amd64.tar.gz) >/dev/null
+diff <(ls "$1") <(printf '%s\n' LICENSE-APACHE LICENSE-MIT sbom-1.2.3.cdx.json storageprims-ffi-1.2.3-linux-amd64.tar.gz) >/dev/null || {
+	echo 'error: base inventory mismatch' >&2
+	exit 1
+}
 SH
 chmod +x "$repo/scripts/"*.sh
 printf 'linux-amd64 libstorageprims_ffi.so libstorageprims_ffi.a\n' >"$repo/config/release/ffi-platforms.txt"
@@ -72,7 +75,7 @@ case "\$1 \$2" in
 	echo "\$count" >"\$count_file"
 	attempt=1
 	[[ "\${FIXTURE_RERUN:-no}" != yes || "\$count" -lt 2 ]] || attempt=2
-	json="\$(printf '{"status":"completed","conclusion":"success","event":"%s","head_sha":"%s","head_branch":"v1.2.3","path":"%s","run_attempt":%s}' "\${FIXTURE_EVENT:-push}" "$commit" "\${FIXTURE_PATH:-.github/workflows/release.yml}" "\$attempt")"
+	json="\$(printf '{"status":"%s","conclusion":"%s","event":"%s","head_sha":"%s","head_branch":"%s","path":"%s","run_attempt":%s}' "\${FIXTURE_STATUS:-completed}" "\${FIXTURE_CONCLUSION:-success}" "\${FIXTURE_EVENT:-push}" "\${FIXTURE_HEAD_SHA:-$commit}" "\${FIXTURE_HEAD_BRANCH:-v1.2.3}" "\${FIXTURE_PATH:-.github/workflows/release.yml}" "\$attempt")"
 	if [[ -n "\$jq_filter" ]]; then jq -r "\$jq_filter" <<<"\$json"; else printf '%s\n' "\$json"; fi ;;
 'run download')
 	name='' dir=''
@@ -82,7 +85,7 @@ case "\$1 \$2" in
 	done
 	[[ "\$3" == "\${FIXTURE_EXPECT_RUN:-11}" ]] || exit 1
 	mkdir -p "\$dir"
-	cp -P "$art/\$name/"* "\$dir/" ;;
+	cp -RP "$art/\$name/"* "\$dir/" ;;
 *) printf 'unexpected gh call: %s\n' "\$*" >&2; exit 1 ;;
 esac
 SH
@@ -141,6 +144,11 @@ refused 'select one exact successful run' env FIXTURE_RUNS="$scratch/none.json" 
 refused 'workflow run identity mismatch' env FIXTURE_EVENT=workflow_dispatch bash -c run
 refused 'workflow run identity mismatch' env FIXTURE_PATH=.github/workflows/other.yml bash -c run
 refused 'run attempt changed during download' env FIXTURE_RERUN=yes bash -c run
+# Each run field is checked on the run itself, not only by the list filter.
+refused 'workflow run identity mismatch' env FIXTURE_STATUS=in_progress bash -c run
+refused 'workflow run identity mismatch' env FIXTURE_CONCLUSION=failure bash -c run
+refused 'workflow run identity mismatch' env FIXTURE_HEAD_SHA=0000000000000000000000000000000000000000 bash -c run
+refused 'workflow run identity mismatch' env FIXTURE_HEAD_BRANCH=main bash -c run
 # Artifact content must name the verified tag object and carry its licenses.
 cp "$art/release-identity/release-identity.json" "$scratch/identity.keep"
 printf '{"tag":"v1.2.3","object":"0000000000000000000000000000000000000000","commit":"%s"}\n' "$commit" >"$art/release-identity/release-identity.json"
@@ -157,6 +165,35 @@ rm "$art/sbom/LICENSE-MIT"
 ln -s /etc/hosts "$art/sbom/linked.json"
 refused 'unsafe artifact entry' bash -c run
 rm "$art/sbom/linked.json"
+# A second identity record, an unsafe name, an inventory the validator
+# refuses, and a symlinked destination are refused.
+cp "$art/release-identity/release-identity.json" "$art/sbom/release-identity.json"
+mkdir -p "$art/sbom/nested" && mv "$art/sbom/release-identity.json" "$art/sbom/nested/"
+refused 'duplicate artifact release identity' bash -c run
+rm -rf "$art/sbom/nested"
+printf 'x\n' >"$art/sbom/bad name.json"
+refused 'unsafe artifact name' bash -c run
+rm "$art/sbom/bad name.json"
+printf 'x\n' >"$art/sbom/extra.json"
+refused 'base inventory mismatch' bash -c run
+rm "$art/sbom/extra.json"
+rm -rf "$repo/dist" && mkdir -p "$scratch/elsewhere" && ln -s "$scratch/elsewhere" "$repo/dist"
+# shellcheck disable=SC2016 # expanded by the child shell
+refused 'unsafe artifact destination' bash -c 'cd "$repo" && bash scripts/release-fetch-ci-artifacts.sh >"$scratch/out" 2>&1'
+rm "$repo/dist"
+# A failed re-fetch leaves no record behind.
+run
+printf 'changed\n' >"$art/release-identity/LICENSE-MIT"
+rm -rf "$repo/dist/release" && mkdir -p "$repo/dist/release"
+if (cd "$repo" && bash scripts/release-fetch-ci-artifacts.sh) >"$scratch/out" 2>&1; then
+	echo 'error: changed license accepted' >&2
+	exit 1
+fi
+[[ ! -e "$repo/dist/release.identity" ]] || {
+	echo 'error: a failed fetch left the previous record in place' >&2
+	exit 1
+}
+cp "$repo/LICENSE-MIT" "$art/release-identity/LICENSE-MIT"
 run || {
 	cat "$scratch/out" >&2
 	exit 1

@@ -42,6 +42,8 @@ destination="$expected"
 [[ ! -L "$root/dist" && ! -L "$destination" && ! -L "$destination.identity" ]] ||
 	die 'unsafe artifact destination'
 mkdir -p "$destination"
+# A record from an earlier fetch must not survive a fetch that fails.
+rm -f "$destination.identity"
 [[ -z "$(find "$destination" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
 	die 'destination must be empty; run make release-clean first'
 

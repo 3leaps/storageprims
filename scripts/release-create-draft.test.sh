@@ -27,12 +27,19 @@ SH
 cat >"$scratch/bin/gh" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
+# Like GitHub: the tags endpoint 404s for a draft, so it must never be the proof.
 'api repos/3leaps/storageprims/releases/tags/v1.2.3')
-	printf 'lookup\n' >>"$MOCK_CALLS"
-	case "${MOCK_LOOKUP:-absent}" in
-	absent) printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1 ;;
-	present) printf '{"id":1}\n' ;;
-	unknown) printf 'gh: Bad credentials (HTTP 401)\n' >&2; exit 1 ;;
+	printf 'gh: Not Found (HTTP 404)\n' >&2
+	exit 1 ;;
+'api repos/3leaps/storageprims --jq .permissions.push')
+	printf 'perms\n' >>"$MOCK_CALLS"
+	[[ "${MOCK_PUSH:-true}" == true ]] && printf 'true\n' || printf 'false\n' ;;
+"api --paginate repos/3leaps/storageprims/releases?per_page=100 --jq .[].tag_name")
+	printf 'list\n' >>"$MOCK_CALLS"
+	case "${MOCK_LIST:-absent}" in
+	absent) printf 'v1.2.2\nv1.2.30\n' ;;
+	draft) printf 'v1.2.2\nv1.2.3\n' ;;
+	fail) printf 'gh: HTTP 502\n' >&2; exit 1 ;;
 	esac ;;
 *'--method POST repos/3leaps/storageprims/releases '*)
 	[[ "$*" == *'-F draft=true'* && "$*" == *'-F prerelease=false'* && "$*" == *"target_commitish=$FIXTURE_COMMIT"* ]] || exit 1
@@ -87,15 +94,15 @@ refused 'staged artifact record is absent' 'guard' run
 record 0000000000000000000000000000000000000000
 refused 'fetched for another tag object' 'guard' run
 record "$object"
-refused 'a release for this tag already exists' $'guard\nlookup' env MOCK_LOOKUP=present bash -c "$(declare -f run); run"
-refused 'release absence is unknown' $'guard\nlookup' env MOCK_LOOKUP=unknown bash -c "$(declare -f run); run"
-refused 'create-only draft request failed' $'guard\nlookup\ncreate' env MOCK_CREATE=conflict bash -c "$(declare -f run); run"
-refused 'draft may be partial' $'guard\nlookup\ncreate\nupload' env MOCK_UPLOAD=fail bash -c "$(declare -f run); run"
-refused 'remote draft asset inventory mismatch' $'guard\nlookup\ncreate\nupload\nstate' env MOCK_STATE=bad bash -c "$(declare -f run); run"
+refused 'the GitHub identity cannot see drafts' $'guard\nperms' env MOCK_PUSH=false bash -c "$(declare -f run); run"
+refused 'a release or draft for this tag already exists' $'guard\nperms\nlist' env MOCK_LIST=draft bash -c "$(declare -f run); run"
+refused 'the release list could not be read' $'guard\nperms\nlist' env MOCK_LIST=fail bash -c "$(declare -f run); run"
+refused 'create-only draft request failed' $'guard\nperms\nlist\ncreate' env MOCK_CREATE=conflict bash -c "$(declare -f run); run"
+refused 'draft may be partial' $'guard\nperms\nlist\ncreate\nupload' env MOCK_UPLOAD=fail bash -c "$(declare -f run); run"
+refused 'remote draft asset inventory mismatch' $'guard\nperms\nlist\ncreate\nupload\nstate' env MOCK_STATE=bad bash -c "$(declare -f run); run"
 run || {
 	cat "$scratch/out" >&2
 	exit 1
 }
-[[ "$(cat "$MOCK_CALLS")" == $'guard\nlookup\ncreate\nupload\nstate' ]]
-[[ ! -e "$repo/dist/release.draft-error" ]]
-echo '[ok] create-only draft: fetch-record binding, existing or unknown release refused, create conflict, partial upload and final state controls passed'
+[[ "$(cat "$MOCK_CALLS")" == $'guard\nperms\nlist\ncreate\nupload\nstate' ]]
+echo '[ok] create-only draft: fetch-record binding, a draft visible only in the release list, an identity that cannot see drafts and an unreadable list refused, create conflict, partial upload and final state controls passed'

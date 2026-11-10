@@ -98,6 +98,15 @@ restore v1.2.3 || {
 STORAGEPRIMS_RELEASE_TAG=v1.2.3 bash ./guard.sh >/dev/null
 # The token reached curl on its config (stdin), never in argv.
 grep -q 'Authorization: Bearer fixture-job-token' "$scratch/curl.config"
+# Default curl configuration and environment proxies are never consulted.
+[[ "$(head -1 "$scratch/curl.argv" | cut -d' ' -f1)" == --disable ]] || {
+	echo 'error: curl --disable is not the first argument' >&2
+	exit 1
+}
+grep -q -- "--noproxy \\*" "$scratch/curl.argv" || {
+	echo 'error: curl does not refuse environment proxies' >&2
+	exit 1
+}
 ! grep -q 'fixture-job-token' "$scratch/curl.argv" || {
 	echo 'error: the token appeared in curl argv' >&2
 	exit 1

@@ -19,7 +19,7 @@
 .PHONY: install uninstall install-test
 .PHONY: version-patch version-minor version-major version-set version-sync version-check
 .PHONY: release-check release-preflight release-tooling-test release-guard-tag-version release-fetch release-draft
-.PHONY: release-clean release-download release-notes release-checksums release-sign
+.PHONY: release-clean release-verify-draft release-resume release-notes release-checksums release-sign
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
 .PHONY: release-crates-list release-crates-dry-run release-crates-verify
@@ -567,6 +567,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-pgp-home.test.sh
 	@./scripts/release-create-draft.test.sh
 	@./scripts/release-fetch-ci-artifacts.test.sh
+	@./scripts/release-verify-draft.test.sh
 	@./scripts/release-decernor.test.sh
 	@./scripts/release-pin-precursors.test.sh
 	@./scripts/release-tag-controls.test.sh
@@ -579,6 +580,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-assets.test.sh
 	@./scripts/release-github-state.test.sh
 	@./scripts/release-safety.test.sh
+	@./scripts/release-workflow-policy.test.sh
 	@./scripts/release-negative-controls.test.sh
 	@echo "[ok] Release tooling tests passed"
 
@@ -643,8 +645,8 @@ release-fetch: ## Stage exact unsigned artifacts from the verified tag workflow 
 release-draft: ## Create a new unsigned draft from the staged artifacts (create-only)
 	@./scripts/release-create-draft.sh
 
-release-download: ## Recovery: download exact unsigned assets from an existing draft
-	@./scripts/download-release-assets.sh "$(RELEASE_DIR)"
+release-verify-draft: ## Prove the draft holds exactly the staged unsigned assets
+	@./scripts/release-verify-draft.sh "$(RELEASE_DIR)"
 
 release-notes: ## Add the exact per-cut notes to the signable asset set
 	@STORAGEPRIMS_REQUIRE_TAG=1 ./scripts/release-guard-tag-version.sh >/dev/null
@@ -687,6 +689,18 @@ release: release-guard-tag-version ## Run the serialized local signing ceremony
 	@$(MAKE) release-clean
 	@$(MAKE) release-fetch
 	@$(MAKE) release-draft
+	@$(MAKE) release-notes
+	@$(MAKE) release-checksums
+	@$(MAKE) release-sign
+	@$(MAKE) release-export-keys
+	@$(MAKE) release-upload
+	@echo "[ok] Release assets signed and uploaded; GitHub release remains draft"
+
+release-resume: release-guard-tag-version ## Resume signing against the existing exact draft
+	@STORAGEPRIMS_REQUIRE_TAG=1 ./scripts/release-guard-tag-version.sh >/dev/null
+	@$(MAKE) release-clean
+	@$(MAKE) release-fetch
+	@$(MAKE) release-verify-draft
 	@$(MAKE) release-notes
 	@$(MAKE) release-checksums
 	@$(MAKE) release-sign
