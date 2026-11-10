@@ -1,8 +1,10 @@
 # Guides
 
-Task-oriented documentation for using the storageprims Rust crates. Design
-rationale lives in [`docs/decisions/`](../decisions/README.md); these guides
-describe how to use what is implemented.
+storageprims lets one code path read and write objects in an S3 bucket or a
+local directory. These guides show how the crates fit together, how to use the
+local provider for storage and for tests, and how to write code that does not
+care where its data lives. Design rationale lives in
+[`docs/decisions/`](../decisions/README.md).
 
 | Guide                                                                 | Read it when                                                                                                           |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |

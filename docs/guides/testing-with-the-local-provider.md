@@ -3,7 +3,7 @@
 Code that talks to object storage is usually tested against a mock, a container
 emulator, or a real bucket. The local provider adds a fourth option: the real
 `StorageProvider` implementation, on a temporary directory. Tests stay fast and
-hermetic, and they exercise real behaviour (atomic replacement, create-only
+hermetic, and they exercise a real provider's behaviour (atomic replacement, create-only
 races, listing and pagination, error variants) instead of a mock's idea of it.
 
 ## The pattern

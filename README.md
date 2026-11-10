@@ -8,15 +8,17 @@ providers and a Unix/POSIX C ABI.**
 
 ## The Problem
 
-Cloud storage access is reimplemented independently across multiple repositories and organizations. Each implementation re-solves the same problems: auth chain resolution, error taxonomy, retry behavior, streaming I/O, credential management, provider-specific quirks. When a bug is fixed in one place, it stays broken in others.
+Cloud storage access is reimplemented independently across multiple repositories and organizations. Each implementation re-solves the same problems: auth chain resolution, error taxonomy, retry behavior, streaming I/O, credential management, provider-specific quirks. When a bug is fixed in one place, it stays broken in others. Code written against one cloud SDK is also hard to point at local disk and hard to test without a real bucket.
 
 ## The Solution
 
 storageprims provides a uniform Rust interface for object storage. The current
 workspace implements the core contracts, an S3 provider, a rooted local
 filesystem provider, provider-neutral operations (bounded cross-provider relay
-and line-oriented helpers), and a Unix/POSIX C ABI for S3. The same code can run
-against a bucket or a local directory; see the [guides](docs/guides/README.md).
+and line-oriented helpers), and a Unix/POSIX C ABI for S3. The same code runs
+against a bucket or a local directory, so you can test storage logic on a
+temporary directory and choose the backend at startup; see the
+[guides](docs/guides/README.md).
 Additional providers and language bindings are planned.
 
 Part of the **3leaps prims family**:
@@ -30,24 +32,30 @@ Part of the **3leaps prims family**:
 
 ## Implementation Status
 
-| Surface                                                     | Status                                          |
-| ----------------------------------------------------------- | ----------------------------------------------- |
-| Rust core contracts and line-oriented operations            | Implemented                                     |
-| AWS S3 and S3-compatible provider                           | Implemented                                     |
-| List, head, get, range get, put, delete, and S3-native copy | Implemented                                     |
-| Provider-enforced conditional put                           | Implemented                                     |
-| Root-prefix containment for listing and object operations   | Implemented                                     |
-| C ABI control JSON and descriptor/pipe streaming            | Implemented on Unix/POSIX                       |
-| Portable Rust crates on Windows                             | Implemented and native-tested                   |
-| Windows C ABI                                               | Planned                                         |
-| Go and TypeScript bindings                                  | Planned                                         |
-| Local filesystem provider (`storageprims-local`)            | Implemented on main (Rust; first release 0.2.0) |
-| Bounded single-object relay between providers               | Implemented on main (Rust; first release 0.2.0) |
-| GCS, Azure Blob, and CLI crates                             | Planned                                         |
-| Multipart upload                                            | Planned                                         |
-| Rust delimiter/common-prefix listing (S3 and local)         | Implemented (Rust only)                         |
+| Surface                                                     | Status                                        |
+| ----------------------------------------------------------- | --------------------------------------------- |
+| Rust core contracts and line-oriented operations            | Implemented                                   |
+| AWS S3 and S3-compatible provider                           | Implemented                                   |
+| Local filesystem provider (`storageprims-local`)            | Implemented on main (Rust; planned for 0.2.0) |
+| Bounded single-object relay between providers               | Implemented on main (Rust; planned for 0.2.0) |
+| List, head, get, range get, put, delete, and S3-native copy | Implemented                                   |
+| Provider-enforced conditional put                           | Implemented                                   |
+| Root-prefix containment for listing and object operations   | Implemented                                   |
+| C ABI control JSON and descriptor/pipe streaming            | Implemented on Unix/POSIX                     |
+| Portable Rust crates on Windows                             | Implemented and native-tested                 |
+| Windows C ABI                                               | Planned                                       |
+| Go and TypeScript bindings                                  | Planned                                       |
+| GCS, Azure Blob, and CLI crates                             | Planned                                       |
+| Multipart upload                                            | Planned                                       |
+| Rust delimiter/common-prefix listing (S3 and local)         | Implemented (Rust only)                       |
 
 ## Quick Start (Rust)
+
+No bucket needed to try it: `cargo run -p storageprims-local --example local_roundtrip`
+stores, lists, and deletes objects in a temporary directory. See the
+[local provider guide](docs/guides/local-provider.md).
+
+With S3:
 
 ```rust
 use storageprims_core::{
@@ -73,10 +81,6 @@ complete, compile-checked version is
 [`crates/storageprims-s3/examples/list.rs`](crates/storageprims-s3/examples/list.rs).
 It uses the AWS SDK default credential chain; no credentials are passed in
 arguments or source code.
-
-For the local filesystem provider, see
-[`crates/storageprims-local/examples/local_roundtrip.rs`](crates/storageprims-local/examples/local_roundtrip.rs)
-and the [local provider guide](docs/guides/local-provider.md).
 
 ### S3 authentication
 
@@ -108,7 +112,8 @@ ffi/storageprims-ffi          Unix/POSIX C ABI and runtime (S3)
 ```
 
 [How the libraries fit together](docs/guides/how-the-libraries-fit.md) explains
-the provider contract, optional capabilities, errors, and commit knowledge.
+the provider contract, optional capabilities, errors, and what a failed write
+tells you about whether the object landed.
 
 ### FFI Design
 

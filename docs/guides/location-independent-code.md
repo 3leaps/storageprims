@@ -102,7 +102,7 @@ feature.
 provider to another (local to S3, S3 to local, bucket to bucket through a
 different provider instance), use `storageprims_ops::relay_copy`. It streams one
 object through a bounded buffer, with an explicit size, buffer and time budget,
-and reports exactly how far the write got:
+and reports what is known about whether the write was committed:
 
 ```rust
 let budget = TransferBudget::new(16 * 1024 * 1024, 64 * 1024, Duration::from_secs(60))?;
