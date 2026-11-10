@@ -2,8 +2,9 @@
 
 Root-contained local filesystem provider for `storageprims`.
 
-See the [storageprims repository](https://github.com/3leaps/storageprims) for
-configuration, containment guarantees, and usage documentation.
+Guides: [the local filesystem provider](https://github.com/3leaps/storageprims/blob/main/docs/guides/local-provider.md) (keys,
+guarantees, limits, platforms), [testing with the local provider](https://github.com/3leaps/storageprims/blob/main/docs/guides/testing-with-the-local-provider.md),
+and [writing location-independent code](https://github.com/3leaps/storageprims/blob/main/docs/guides/location-independent-code.md).
 
 `LocalProvider::new(root)` opens and retains a non-inheritable directory handle
 without following a symlink or reparse point on the root leaf itself (allowing

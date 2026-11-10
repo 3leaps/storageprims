@@ -3,19 +3,23 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust: 1.94.1](https://img.shields.io/badge/Rust-1.94.1-orange.svg)](https://www.rust-lang.org)
 
-**Provider-neutral Rust storage primitives with an implemented S3 backend and a
-Unix/POSIX C ABI.**
+**Provider-neutral Rust storage primitives with S3 and local filesystem
+providers and a Unix/POSIX C ABI.**
 
 ## The Problem
 
-Cloud storage access is reimplemented independently across multiple repositories and organizations. Each implementation re-solves the same problems: auth chain resolution, error taxonomy, retry behavior, streaming I/O, credential management, provider-specific quirks. When a bug is fixed in one place, it stays broken in others.
+Cloud storage access is reimplemented independently across multiple repositories and organizations. Each implementation re-solves the same problems: auth chain resolution, error taxonomy, retry behavior, streaming I/O, credential management, provider-specific quirks. When a bug is fixed in one place, it stays broken in others. Code written against one cloud SDK is also hard to point at local disk and hard to test without a real bucket.
 
 ## The Solution
 
-storageprims provides a uniform Rust interface for cloud object storage
-operations. The current workspace implements the core contracts, reusable
-line-oriented operations, an S3 backend, and a Unix/POSIX C ABI. Additional
-providers and language bindings are planned.
+storageprims provides a uniform Rust interface for object storage. The current
+workspace implements the core contracts, an S3 provider, a rooted local
+filesystem provider, provider-neutral operations (bounded cross-provider relay
+and line-oriented helpers), and a Unix/POSIX C ABI for S3. The same code runs
+against a bucket or a local directory, so you can test storage logic on a
+temporary directory and choose the backend at startup; see the
+[guides](docs/guides/README.md).
+Additional providers and language bindings are planned.
 
 Part of the **3leaps prims family**:
 
@@ -28,22 +32,30 @@ Part of the **3leaps prims family**:
 
 ## Implementation Status
 
-| Surface                                                     | Status                        |
-| ----------------------------------------------------------- | ----------------------------- |
-| Rust core contracts and line-oriented operations            | Implemented                   |
-| AWS S3 and S3-compatible provider                           | Implemented                   |
-| List, head, get, range get, put, delete, and S3-native copy | Implemented                   |
-| Provider-enforced conditional put                           | Implemented                   |
-| Root-prefix containment for listing and object operations   | Implemented                   |
-| C ABI control JSON and descriptor/pipe streaming            | Implemented on Unix/POSIX     |
-| Portable Rust crates on Windows                             | Implemented and native-tested |
-| Windows C ABI                                               | Planned                       |
-| Go and TypeScript bindings                                  | Planned                       |
-| GCS, Azure Blob, local filesystem, and CLI crates           | Planned                       |
-| Multipart upload                                            | Planned                       |
-| Rust delimiter/common-prefix listing                        | Implemented (Rust only)       |
+| Surface                                                     | Status                                        |
+| ----------------------------------------------------------- | --------------------------------------------- |
+| Rust core contracts and line-oriented operations            | Implemented                                   |
+| AWS S3 and S3-compatible provider                           | Implemented                                   |
+| Local filesystem provider (`storageprims-local`)            | Implemented on main (Rust; planned for 0.2.0) |
+| Bounded single-object relay between providers               | Implemented on main (Rust; planned for 0.2.0) |
+| List, head, get, range get, put, delete, and S3-native copy | Implemented                                   |
+| Provider-enforced conditional put                           | Implemented                                   |
+| Root-prefix containment for listing and object operations   | Implemented                                   |
+| C ABI control JSON and descriptor/pipe streaming            | Implemented on Unix/POSIX                     |
+| Portable Rust crates on Windows                             | Implemented and native-tested                 |
+| Windows C ABI                                               | Planned                                       |
+| Go and TypeScript bindings                                  | Planned                                       |
+| GCS, Azure Blob, and CLI crates                             | Planned                                       |
+| Multipart upload                                            | Planned                                       |
+| Rust delimiter/common-prefix listing (S3 and local)         | Implemented (Rust only)                       |
 
 ## Quick Start (Rust)
+
+No bucket needed to try it: `cargo run -p storageprims-local --example local_roundtrip`
+stores, lists, and deletes objects in a temporary directory. See the
+[local provider guide](docs/guides/local-provider.md).
+
+With S3:
 
 ```rust
 use storageprims_core::{
@@ -64,7 +76,8 @@ let result = provider.list(ListOptions::default()).await?;
 println!("{} objects", result.objects.len());
 ```
 
-The complete, compile-checked version is
+The snippet runs inside an async `main` (the example uses `#[tokio::main]`). The
+complete, compile-checked version is
 [`crates/storageprims-s3/examples/list.rs`](crates/storageprims-s3/examples/list.rs).
 It uses the AWS SDK default credential chain; no credentials are passed in
 arguments or source code.
@@ -90,12 +103,17 @@ for the proposed configuration and credential-safety model.
 storageprims uses a layered workspace architecture:
 
 ```
-storageprims-core          Core traits, error types, URI parsing
+crates/storageprims-core     Core traits, optional capabilities, errors, URIs
         │
-        ├── storageprims-ops    Provider-neutral line operations
-        ├── storageprims-s3     AWS S3 and S3-compatible provider
-        └── storageprims-ffi    Unix/POSIX C ABI and runtime
+        ├── storageprims-s3      AWS S3 and S3-compatible provider
+        ├── storageprims-local   Rooted local filesystem provider
+        └── storageprims-ops     Cross-provider relay and line operations
+ffi/storageprims-ffi          Unix/POSIX C ABI and runtime (S3)
 ```
+
+[How the libraries fit together](docs/guides/how-the-libraries-fit.md) explains
+the provider contract, optional capabilities, errors, and what a failed write
+tells you about whether the object landed.
 
 ### FFI Design
 
