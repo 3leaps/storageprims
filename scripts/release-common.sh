@@ -114,6 +114,17 @@ require_complete_pgp_config() {
 		echo "error: optional PGP signing requires both PGP variables" >&2
 		return 1
 	fi
+	local home root
+	home="$(cd "$STORAGEPRIMS_GPG_HOMEDIR" 2>/dev/null && pwd -P)" || {
+		echo "error: configured GPG home is unavailable" >&2
+		return 1
+	}
+	root="$(cd "$(release_repo_root)" && pwd -P)"
+	case "$home" in "$root" | "$root"/*)
+		echo "error: GPG home must be outside the repository" >&2
+		return 1
+		;;
+	esac
 }
 
 assert_exact_directory_inventory() (

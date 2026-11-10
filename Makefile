@@ -564,6 +564,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/sign-release-assets.test.sh
 	@./scripts/release-restore-tag-ref.test.sh
 	@./scripts/export-release-keys.test.sh
+	@./scripts/release-pgp-home.test.sh
 	@./scripts/release-create-draft.test.sh
 	@./scripts/release-fetch-ci-artifacts.test.sh
 	@./scripts/release-decernor.test.sh

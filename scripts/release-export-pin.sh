@@ -17,12 +17,16 @@ stop() {
 [[ "$STORAGEPRIMS_GPG_HOMEDIR" == /* && -d "$STORAGEPRIMS_GPG_HOMEDIR" ]] || stop 'approved GPG home must be an absolute directory'
 [[ -f "$STORAGEPRIMS_MINISIGN_PUB" && -s "$STORAGEPRIMS_MINISIGN_PUB" && ! -L "$STORAGEPRIMS_MINISIGN_PUB" ]] ||
 	stop 'minisign public export must be a nonempty regular file, not a symlink'
-python3 - "$STORAGEPRIMS_GPG_HOMEDIR" "$HOME/.gnupg" <<'PY'
+python3 - "$STORAGEPRIMS_GPG_HOMEDIR" "$HOME/.gnupg" "$(git rev-parse --show-toplevel)" <<'PY'
 from pathlib import Path
 import sys
 
-if Path(sys.argv[1]).resolve() == Path(sys.argv[2]).resolve():
+home = Path(sys.argv[1]).resolve()
+if home == Path(sys.argv[2]).resolve():
     raise SystemExit('STOP: default GPG home is not approved for this export')
+repo = Path(sys.argv[3]).resolve()
+if home == repo or repo in home.parents:
+    raise SystemExit('STOP: the GPG home must be outside the repository')
 PY
 [[ "$STORAGEPRIMS_PGP_KEY_ID" == *'!' ]] || stop 'signing-subkey selector must end with !'
 resolve_release_decernor ceremony || stop 'trusted Decernor identity/version check failed'
