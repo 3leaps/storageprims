@@ -591,7 +591,6 @@ release-github-preflight: ## Verify GitHub token defaults, tag ruleset, and immu
 
 release-preflight: ## Verify clean-tree pre-tag requirements
 	@./scripts/validate-release-anchors.sh
-	@./scripts/release-github-preflight.sh
 	@./scripts/release-inspect-tag-ruleset.sh "v$(VERSION)"
 	@echo "Running release preflight checks..."
 	@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
@@ -599,6 +598,7 @@ release-preflight: ## Verify clean-tree pre-tag requirements
 		git status --short; \
 		exit 1; \
 	fi
+	@./scripts/release-github-preflight.sh
 	@$(MAKE) pr-final --silent
 	@$(MAKE) version-check --silent
 	@grep -Eq "^## v$(VERSION) — [0-9]{4}-[0-9]{2}-[0-9]{2}$$" RELEASE_NOTES.md || \
