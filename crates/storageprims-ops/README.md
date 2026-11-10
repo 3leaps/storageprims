@@ -1,7 +1,14 @@
 # storageprims-ops
 
-Line-oriented operations and bounded single-object relay (`relay::relay_copy`)
-built on the provider-neutral `storageprims-core` contracts.
+Provider-neutral operations built on the `storageprims-core` contracts:
+
+- `relay_copy`: bounded single-object transfer between any two providers, with
+  an explicit size, buffer and time budget and a commit-knowledge receipt. See
+  [writing location-independent code](https://github.com/3leaps/storageprims/blob/main/docs/guides/location-independent-code.md).
+- Line-oriented helpers (`head_lines`, `tail_lines`, `mid_lines`,
+  `count_lines`) and byte previews (`preview_bytes`, `preview_bytes_selected`).
+  These require a provider with guarded reads, such as `S3Provider`; the local
+  provider does not offer them.
 
 See the [storageprims repository](https://github.com/3leaps/storageprims) for
 workspace documentation.
