@@ -58,12 +58,39 @@ GH_API_WRITE = re.compile(
 SECRETS = re.compile(r"(?i)\bsecrets\b")
 SHELLS = {"bash", "sh", "pwsh", "powershell"}
 # docker run flags without a value; any other option form fails closed.
-DOCKER_BOOL_OPTIONS = {"--rm", "-i", "-t", "-it", "-ti", "--init", "--interactive", "--tty"}
+DOCKER_BOOL_OPTIONS = {
+    "--rm",
+    "-i",
+    "-t",
+    "-it",
+    "-ti",
+    "--init",
+    "--interactive",
+    "--tty",
+}
 # docker run options that take a separate value argument.
 DOCKER_VALUE_OPTIONS = {
-    "-v", "--volume", "-w", "--workdir", "-e", "--env", "-u", "--user",
-    "--entrypoint", "--name", "--network", "--platform", "--mount",
-    "--env-file", "-p", "--publish", "--label", "-l", "--cpus", "-m", "--memory",
+    "-v",
+    "--volume",
+    "-w",
+    "--workdir",
+    "-e",
+    "--env",
+    "-u",
+    "--user",
+    "--entrypoint",
+    "--name",
+    "--network",
+    "--platform",
+    "--mount",
+    "--env-file",
+    "-p",
+    "--publish",
+    "--label",
+    "-l",
+    "--cpus",
+    "-m",
+    "--memory",
 }
 
 
@@ -75,7 +102,9 @@ def load(path):
     except FileNotFoundError:
         sys.exit("error: yq is required to check workflow policy")
     except subprocess.CalledProcessError as exc:
-        sys.exit(f"error: {path}: yq could not parse the workflow: {exc.stderr.strip()}")
+        sys.exit(
+            f"error: {path}: yq could not parse the workflow: {exc.stderr.strip()}"
+        )
     return json.loads(out)
 
 
@@ -115,16 +144,35 @@ def check_image(where, image, errors):
 CONTAINER_TOOLS = {"docker", "podman", "nerdctl"}
 # Global options before the subcommand, with and without a separate value.
 CONTAINER_GLOBAL_VALUE_OPTIONS = {
-    "-H", "--host", "-c", "--context", "--config", "-l", "--log-level",
-    "--tlscacert", "--tlscert", "--tlskey",
+    "-H",
+    "--host",
+    "-c",
+    "--context",
+    "--config",
+    "-l",
+    "--log-level",
+    "--tlscacert",
+    "--tlscert",
+    "--tlskey",
 }
 CONTAINER_GLOBAL_BOOL_OPTIONS = {"-D", "--debug", "--tls", "--tlsverify"}
 # Subcommands that start a container from an image argument.
 IMAGE_SUBCOMMANDS = {"run", "create"}
 # Subcommands that take no image argument.
 NO_IMAGE_SUBCOMMANDS = {
-    "compose", "ps", "logs", "stop", "start", "rm", "inspect", "version",
-    "info", "exec", "kill", "wait", "cp",
+    "compose",
+    "ps",
+    "logs",
+    "stop",
+    "start",
+    "rm",
+    "inspect",
+    "version",
+    "info",
+    "exec",
+    "kill",
+    "wait",
+    "cp",
 }
 
 
@@ -171,7 +219,9 @@ def container_images(line):
         while j < len(words) and words[j].startswith("-"):
             if words[j] in CONTAINER_GLOBAL_VALUE_OPTIONS:
                 j += 2
-            elif words[j] in CONTAINER_GLOBAL_BOOL_OPTIONS or (words[j].startswith("--") and "=" in words[j]):
+            elif words[j] in CONTAINER_GLOBAL_BOOL_OPTIONS or (
+                words[j].startswith("--") and "=" in words[j]
+            ):
                 j += 1
             else:
                 break
@@ -199,7 +249,11 @@ def strings(node):
 
 
 def check_shell(where, holder, errors):
-    shell = ((holder or {}).get("defaults") or {}).get("run", {}).get("shell") if isinstance(holder, dict) else None
+    shell = (
+        ((holder or {}).get("defaults") or {}).get("run", {}).get("shell")
+        if isinstance(holder, dict)
+        else None
+    )
     if shell is not None and shell not in SHELLS:
         errors.append(f"{where}: default shell {shell!r} is not a standard shell")
 
@@ -207,16 +261,22 @@ def check_shell(where, holder, errors):
 def check_permissions(where, perms, top, errors):
     if top:
         if perms != {"contents": "read"}:
-            errors.append(f"{where}: top-level permissions must be exactly {{contents: read}}, got {perms!r}")
+            errors.append(
+                f"{where}: top-level permissions must be exactly {{contents: read}}, got {perms!r}"
+            )
         return
     if perms is None:
         return
     if not isinstance(perms, dict):
-        errors.append(f"{where}: job permissions {perms!r} must be a mapping of read or none")
+        errors.append(
+            f"{where}: job permissions {perms!r} must be a mapping of read or none"
+        )
         return
     for scope, level in perms.items():
         if level not in ("read", "none"):
-            errors.append(f"{where}: permission {scope}: {level!r} grants more than read")
+            errors.append(
+                f"{where}: permission {scope}: {level!r} grants more than read"
+            )
 
 
 def check(path):
@@ -254,9 +314,13 @@ def check(path):
                 if action_name(step["uses"]) == "actions/checkout":
                     persist = (step.get("with") or {}).get("persist-credentials")
                     if persist is not False:
-                        errors.append(f"{step_where}: checkout must set persist-credentials: false (got {persist!r})")
+                        errors.append(
+                            f"{step_where}: checkout must set persist-credentials: false (got {persist!r})"
+                        )
             if "shell" in step and step["shell"] not in SHELLS:
-                errors.append(f"{step_where}: shell {step['shell']!r} is not a standard shell")
+                errors.append(
+                    f"{step_where}: shell {step['shell']!r} is not a standard shell"
+                )
             run = step.get("run")
             if run is None:
                 continue
@@ -264,12 +328,21 @@ def check(path):
                 errors.append(f"{step_where}: run is not a string")
                 continue
             for line in commands(run):
-                if FORBIDDEN_RUN.search(line) or (GH_API.search(line) and GH_API_WRITE.search(line)):
-                    errors.append(f"{step_where}: forbidden release or publish command: {line}")
+                if FORBIDDEN_RUN.search(line) or (
+                    GH_API.search(line) and GH_API_WRITE.search(line)
+                ):
+                    errors.append(
+                        f"{step_where}: forbidden release or publish command: {line}"
+                    )
                 if re.search(r"\b(docker|podman|nerdctl)\b", line):
                     images = container_images(line)
-                    if any(image is None or not DIGEST_IMAGE.match(image) for image in images):
-                        errors.append(f"{step_where}: docker run image is not digest-pinned: {line}")
+                    if any(
+                        image is None or not DIGEST_IMAGE.match(image)
+                        for image in images
+                    ):
+                        errors.append(
+                            f"{step_where}: docker run image is not digest-pinned: {line}"
+                        )
     return errors
 
 

@@ -13,14 +13,14 @@ independent authentication.
 
 ## Public pins
 
-| File | Contents |
-| --- | --- |
-| `docs/security/release-signing-keys.asc` | Public OpenPGP export of the approved primary key and its signing subkey |
-| `docs/security/storageprims-minisign.pub` | The minisign public key that signs the checksum manifests |
-| `config/release/tagger-identity.txt` | The exact git tagger identity |
-| `keys/expected-fingerprints.txt` | Two lines: the OpenPGP primary fingerprint, then the minisign public-blob SHA-256 |
-| `keys/expected-fingerprints.ndjson` | The checker's fingerprint records for the same two keys |
-| `config/release/decernor-ci-sha256.txt` | Digest and filename of the checker archive CI downloads |
+| File                                      | Contents                                                                          |
+| ----------------------------------------- | --------------------------------------------------------------------------------- |
+| `docs/security/release-signing-keys.asc`  | Public OpenPGP export of the approved primary key and its signing subkey          |
+| `docs/security/storageprims-minisign.pub` | The minisign public key that signs the checksum manifests                         |
+| `config/release/tagger-identity.txt`      | The exact git tagger identity                                                     |
+| `keys/expected-fingerprints.txt`          | Two lines: the OpenPGP primary fingerprint, then the minisign public-blob SHA-256 |
+| `keys/expected-fingerprints.ndjson`       | The checker's fingerprint records for the same two keys                           |
+| `config/release/decernor-ci-sha256.txt`   | Digest and filename of the checker archive CI downloads                           |
 
 Release staging copies the published `storageprims-minisign.pub` and
 `storageprims-release-signing-key.asc` assets from the verified tagged commit
