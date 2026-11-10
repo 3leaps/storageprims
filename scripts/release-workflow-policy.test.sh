@@ -180,7 +180,9 @@ done
 base "    steps:
       - run: docker compose -f docker-compose.localstack.yml up -d localstack
       - run: docker container run --rm $image true
-      - run: docker ps" >"$scratch/compose.yml"
+      - run: docker ps
+      - run: docker --context ci -H unix:///var/run/docker.sock run --rm $image true
+      - run: podman create $image" >"$scratch/compose.yml"
 python3 -I "$policy" "$scratch/compose.yml"
 # A comment line or a release download URL is not a release command.
 base "    steps:
