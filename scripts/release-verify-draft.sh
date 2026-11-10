@@ -73,7 +73,7 @@ while IFS=$'\t' read -r asset_id name; do
 		"repos/$STORAGEPRIMS_REPOSITORY/releases/assets/$asset_id" >"$scratch/download" ||
 		die "draft asset $name could not be downloaded"
 	cmp -s "$scratch/download" "$directory/$name" ||
-		die "draft asset $name differs from the verified workflow artifact"
+		die "draft asset $name differs from the verified local $mode set"
 done <"$scratch/assets"
 printf 'id=%s\n' "$id" >"$root/dist/release.draft"
 echo "[ok] draft $id holds exactly the verified $mode assets"

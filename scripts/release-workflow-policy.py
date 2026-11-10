@@ -49,8 +49,11 @@ GH_API_WRITE = re.compile(
     r"(?i)(\s(-X|--method)[\s=]*['\"]?(POST|PATCH|PUT|DELETE)\b"
     r"|\s(-f|-F|--field|--raw-field|--input)[\s=])"
 )
-SECRETS = re.compile(r"\bsecrets\b")
+# Expression context names are case-insensitive in GitHub Actions.
+SECRETS = re.compile(r"(?i)\bsecrets\b")
 SHELLS = {"bash", "sh", "pwsh", "powershell"}
+# docker run flags without a value; any other option form fails closed.
+DOCKER_BOOL_OPTIONS = {"--rm", "-i", "-t", "-it", "-ti", "--init", "--interactive", "--tty"}
 # docker run options that take a separate value argument.
 DOCKER_VALUE_OPTIONS = {
     "-v", "--volume", "-w", "--workdir", "-e", "--env", "-u", "--user",
@@ -104,26 +107,37 @@ def check_image(where, image, errors):
         errors.append(f"{where}: image {image!r} is not digest-pinned")
 
 
-def docker_image(line):
-    """The image argument of a `docker run` command line, or None."""
+def docker_images(line):
+    """The image argument of every `docker run` on a command line.
+
+    None stands for an invocation whose image cannot be identified (an
+    unsupported option form or a parse failure); callers refuse it.
+    """
     try:
-        words = shlex.split(line, comments=False, posix=True)
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        words = list(lexer)
     except ValueError:
-        return None
+        return [None]
+    images = []
     for i in range(len(words) - 1):
-        if words[i] == "docker" and words[i + 1] == "run":
-            rest = words[i + 2:]
-            j = 0
-            while j < len(rest):
-                word = rest[j]
-                if word in DOCKER_VALUE_OPTIONS:
-                    j += 2
-                elif word.startswith("-"):
-                    j += 1
-                else:
-                    return word
-            return None
-    return None
+        if words[i] != "docker" or words[i + 1] != "run":
+            continue
+        image = None
+        j = i + 2
+        while j < len(words):
+            word = words[j]
+            if word in DOCKER_VALUE_OPTIONS:
+                j += 2
+            elif word in DOCKER_BOOL_OPTIONS or (word.startswith("--") and "=" in word):
+                j += 1
+            elif word.startswith("-"):
+                break
+            else:
+                image = word
+                break
+        images.append(image)
+    return images
 
 
 def strings(node):
@@ -208,8 +222,8 @@ def check(path):
                 if FORBIDDEN_RUN.search(line) or (GH_API.search(line) and GH_API_WRITE.search(line)):
                     errors.append(f"{step_where}: forbidden release or publish command: {line}")
                 if re.search(r"\bdocker\s+run\b", line):
-                    image = docker_image(line)
-                    if image is None or not DIGEST_IMAGE.match(image):
+                    images = docker_images(line)
+                    if not images or any(image is None or not DIGEST_IMAGE.match(image) for image in images):
                         errors.append(f"{step_where}: docker run image is not digest-pinned: {line}")
     return errors
 

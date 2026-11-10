@@ -101,7 +101,7 @@ refused 'not exactly the base set' env MOCK_ASSETS='[{"id":101,"name":"LICENSE-M
 # A replaced draft asset is refused even with the right name and size class.
 cp "$scratch/remote/102" "$scratch/remote/102.keep"
 printf 'ffi BYTES\n' >"$scratch/remote/102"
-refused 'differs from the verified workflow artifact' bash -c run
+refused 'differs from the verified local base set' bash -c run
 cp "$scratch/remote/102.keep" "$scratch/remote/102"
 # Bound to the verified release id; a different draft for the tag is refused,
 # and a refused run leaves no id record behind.

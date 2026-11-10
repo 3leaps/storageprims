@@ -155,6 +155,15 @@ refused 'docker run image is not digest-pinned' "$(base "    steps:
 refused 'forbidden release or publish command' "$(base "    steps:
       - run: |
           curl -X POST -H \"Authorization: Bearer \$T\" https://api.github.com/repos/o/r/releases -d '{}'")"
+# Round-3 forms: mixed-case secrets context, several docker invocations on
+# one line, and an unsupported option posing as the image.
+refused 'workflow references secrets' "$(base "    env:
+      GH_TOKEN: \${{ SeCrEtS.RELEASE_TOKEN }}
+$good_steps")"
+refused 'docker run image is not digest-pinned' "$(base "    steps:
+      - run: docker run --rm $image true; docker run --rm alpine:latest true")"
+refused 'docker run image is not digest-pinned' "$(base "    steps:
+      - run: docker run --label-file $image alpine:latest")"
 # A comment line or a release download URL is not a release command.
 base "    steps:
       - run: |
