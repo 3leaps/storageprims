@@ -7,7 +7,11 @@ root="$(cd "$(dirname "$0")/.." && pwd -P)"
 policy="$root/scripts/release-workflow-policy.py"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
-python3 -I "$policy" "$root"/.github/workflows/*.yml
+# Every workflow file GitHub runs, both extensions.
+workflows=()
+while IFS= read -r -d '' file; do workflows+=("$file"); done < <(find "$root/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
+[[ "${#workflows[@]}" -gt 0 ]]
+python3 -I "$policy" "${workflows[@]}"
 
 checkout='actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
 image='ghcr.io/fulmenhq/example@sha256:0000000000000000000000000000000000000000000000000000000000000000'
@@ -118,6 +122,39 @@ refused 'forbidden release or publish command' "$(base "    steps:
       - run: |
           cargo \\
             publish -p crate")"
+# Round-2 bypass forms: action case, local and docker actions, constructed
+# commands, secrets in any spelling, custom shells, digest outside the image.
+refused 'persist-credentials: false' "$(base "    steps:
+      - uses: Actions/Checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")"
+refused 'not pinned to a full commit SHA' "$(base "    steps:
+      - uses: ./.github/actions/probe")"
+refused 'forbidden release or publish command' "$(base "    env: {CMD: gh}
+    steps:
+      - run: \$CMD release create v1.2.3 --draft")"
+refused 'forbidden release or publish command' "$(base "    steps:
+      - run: gh api -X POST /repos/o/r/releases")"
+refused 'forbidden release or publish command' "$(base "    steps:
+      - run: p=repos/o/r; gh api -X POST \"\$p/rel\"\"eases\"")"
+refused 'forbidden release or publish command' "$(base "    steps:
+      - run: gh api \"\$URL\" -f tag_name=v1.2.3")"
+refused 'workflow references secrets' "$(base "    env:
+      GH_TOKEN: \${{ secrets['RELEASE_TOKEN'] }}
+$good_steps")"
+refused 'workflow references secrets' "$(base "    env:
+      ALL: \${{ toJSON(secrets) }}
+$good_steps")"
+refused 'is not a standard shell' "$(base "    defaults: {run: {shell: 'python3 {0}'}}
+$good_steps")"
+refused 'is not a standard shell' "$(base "    steps:
+      - shell: 'bash -c \"gh release create v1 {0}\"'
+        run: echo hi")"
+refused 'docker run image is not digest-pinned' "$(base "    steps:
+      - run: docker run --rm alpine:latest echo example@sha256:0000000000000000000000000000000000000000000000000000000000000000")"
+refused 'docker run image is not digest-pinned' "$(base "    steps:
+      - run: docker run --rm -v \"\$PWD:/src\" alpine:latest")"
+refused 'forbidden release or publish command' "$(base "    steps:
+      - run: |
+          curl -X POST -H \"Authorization: Bearer \$T\" https://api.github.com/repos/o/r/releases -d '{}'")"
 # A comment line or a release download URL is not a release command.
 base "    steps:
       - run: |

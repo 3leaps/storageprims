@@ -253,13 +253,21 @@ Recovery after a stop. Never rerun `make release` once a draft exists:
   example a signing prompt failed): run `make release-resume`. It re-stages the
   verified workflow artifacts and `release-verify-draft` requires the one draft
   for the tag to hold exactly those unsigned bytes before anything is signed.
+  Resume re-fetches from the same workflow run: set the same
+  `STORAGEPRIMS_RELEASE_RUN_ID` if the first fetch needed one, and resume while
+  the run's artifacts are retained (30 days). A rerun of the workflow produces
+  different archive bytes; `release-verify-draft` then refuses, and the draft
+  must be deleted and the ceremony restarted.
 - Stopped inside `release-draft` (partial asset upload) or inside
   `release-upload` (some signed assets uploaded): the draft inventory no longer
   matches and `release-resume` refuses. Inspect the draft, delete it as a
   separate explicit maintainer decision, then run `make release` again.
 
-`release-upload` also runs `release-verify-draft` before it uploads signatures,
-so a draft asset replaced after creation stops the ceremony.
+`release-upload` runs `release-verify-draft` before it uploads signatures, so a
+draft asset replaced after creation stops the ceremony. Every upload and the
+notes update address that verified release id, never the tag, and the same
+release must then hold exactly the signed set byte for byte. Do not publish,
+edit, or delete the draft by any other means while the ceremony runs.
 
 - [ ] Confirm the release remains a draft after upload
 - [ ] Independently download into an empty directory and verify both checksum

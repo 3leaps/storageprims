@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Maintainer-only: prove that the one draft release for the verified tag holds
-# exactly the unsigned base assets staged by release-fetch, byte for byte.
+# exactly the expected assets of the local release directory, byte for byte.
 #
-# Used before signatures are uploaded and when resuming a ceremony against an
-# existing draft, so nothing signed or published can differ from the verified
-# workflow artifacts.
+# Mode `base` (default): the unsigned base assets staged by release-fetch; used
+# before signatures are uploaded and when resuming against an existing draft.
+# Mode `signed`: the complete signed set; used after upload. When
+# STORAGEPRIMS_EXPECTED_DRAFT_ID is set the draft must be that release. The
+# verified release id is recorded in dist/release.draft for later mutations.
 
 set -euo pipefail
 
@@ -19,6 +21,14 @@ die() {
 }
 
 directory="${1:-dist/release}"
+mode="${2:-base}"
+case "$mode" in
+base) expected_assets=release_base_assets ;;
+signed) expected_assets=release_signed_assets ;;
+*) die 'mode must be base or signed' ;;
+esac
+expected_id="${STORAGEPRIMS_EXPECTED_DRAFT_ID:-}"
+[[ -z "$expected_id" || "$expected_id" =~ ^[1-9][0-9]*$ ]] || die 'invalid expected draft id'
 require_release_guard 1 >/dev/null
 tag="$(release_tag)"
 root="$(release_repo_root)"
@@ -45,14 +55,16 @@ gh api --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases?per_page=100" \
 jq -e --arg commit "$commit" '.draft == true and .target_commitish == $commit and (.id | type) == "number"' \
 	"$scratch/matches" >/dev/null || die 'the release for the tag is not a draft at the tag commit'
 id="$(jq -r .id "$scratch/matches")"
+[[ -z "$expected_id" || "$id" == "$expected_id" ]] || die 'the draft for the tag is not the verified release'
+rm -f "$root/dist/release.draft"
 
 gh api --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases/$id/assets?per_page=100" \
 	--jq '.[] | "\(.id)\t\(.name)"' >"$scratch/assets" || die 'the draft asset list could not be read'
 cut -f2 "$scratch/assets" | LC_ALL=C sort >"$scratch/actual"
-release_base_assets | LC_ALL=C sort >"$scratch/expected"
+"$expected_assets" | LC_ALL=C sort >"$scratch/expected"
 cmp -s "$scratch/expected" "$scratch/actual" || {
 	diff -u "$scratch/expected" "$scratch/actual" >&2 || true
-	die 'draft asset inventory is not exactly the unsigned base set'
+	die "draft asset inventory is not exactly the $mode set"
 }
 while IFS=$'\t' read -r asset_id name; do
 	[[ "$asset_id" =~ ^[1-9][0-9]*$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die 'unsafe draft asset entry'
@@ -63,4 +75,5 @@ while IFS=$'\t' read -r asset_id name; do
 	cmp -s "$scratch/download" "$directory/$name" ||
 		die "draft asset $name differs from the verified workflow artifact"
 done <"$scratch/assets"
-echo "[ok] draft $id holds exactly the verified unsigned base assets"
+printf 'id=%s\n' "$id" >"$root/dist/release.draft"
+echo "[ok] draft $id holds exactly the verified $mode assets"

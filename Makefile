@@ -568,6 +568,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-create-draft.test.sh
 	@./scripts/release-fetch-ci-artifacts.test.sh
 	@./scripts/release-verify-draft.test.sh
+	@./scripts/upload-release-assets.test.sh
 	@./scripts/release-decernor.test.sh
 	@./scripts/release-pin-precursors.test.sh
 	@./scripts/release-tag-controls.test.sh
