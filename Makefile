@@ -18,7 +18,7 @@
 .PHONY: build-release build-ffi cbindgen pr-final
 .PHONY: install uninstall install-test
 .PHONY: version-patch version-minor version-major version-set version-sync version-check
-.PHONY: release-check release-preflight release-tooling-test release-guard-tag-version release-fetch release-draft
+.PHONY: release-check release-preflight release-github-preflight release-tooling-test release-guard-tag-version release-fetch release-draft
 .PHONY: release-clean release-verify-draft release-resume release-notes release-checksums release-sign
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
@@ -582,8 +582,12 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-github-state.test.sh
 	@./scripts/release-safety.test.sh
 	@./scripts/release-workflow-policy.test.sh
+	@./scripts/release-github-preflight.test.sh
 	@./scripts/release-negative-controls.test.sh
 	@echo "[ok] Release tooling tests passed"
+
+release-github-preflight: ## Verify GitHub token defaults, tag ruleset, and immutable releases
+	@./scripts/release-github-preflight.sh
 
 release-preflight: ## Verify clean-tree pre-tag requirements
 	@./scripts/validate-release-anchors.sh
@@ -594,6 +598,7 @@ release-preflight: ## Verify clean-tree pre-tag requirements
 		git status --short; \
 		exit 1; \
 	fi
+	@./scripts/release-github-preflight.sh
 	@$(MAKE) pr-final --silent
 	@$(MAKE) version-check --silent
 	@grep -Eq "^## v$(VERSION) — [0-9]{4}-[0-9]{2}-[0-9]{2}$$" RELEASE_NOTES.md || \
