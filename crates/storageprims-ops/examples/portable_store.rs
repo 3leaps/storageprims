@@ -93,10 +93,13 @@ async fn count_objects(store: &dyn StorageProvider, prefix: &str) -> Result<usiz
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scratch =
         std::env::temp_dir().join(format!("storageprims-portable-{}", std::process::id()));
+    // Create the scratch root exclusively: an existing directory is refused, so
+    // the cleanup below can only remove what this run created.
+    std::fs::create_dir(&scratch)?;
     let staging_root = scratch.join("staging");
     let local_destination = scratch.join("destination");
-    std::fs::create_dir_all(&staging_root)?;
-    std::fs::create_dir_all(&local_destination)?;
+    std::fs::create_dir(&staging_root)?;
+    std::fs::create_dir(&local_destination)?;
 
     let result = run(
         &staging_root,
