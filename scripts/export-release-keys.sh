@@ -13,30 +13,43 @@ require_release_guard 1 >/dev/null
 release_tag >/dev/null
 "$SCRIPT_DIR/validate-release-assets.sh" \
 	"$directory" signed-without-keys >/dev/null
-: "${STORAGEPRIMS_MINISIGN_PUB:?load the approved minisign public key}"
-[[ -f "$STORAGEPRIMS_MINISIGN_PUB" && ! -L "$STORAGEPRIMS_MINISIGN_PUB" ]] || {
-	echo "error: configured minisign public key is unavailable" >&2
+# Public keys come from the verified tagged commit as inert blobs, never from
+# the working tree, an environment path or a live keyring export.
+commit="$(git -C "$(release_repo_root)" rev-parse --verify --quiet "refs/tags/$(release_tag)^{commit}")" || {
+	echo "error: release tag commit is unavailable" >&2
 	exit 1
 }
-grep -q '^untrusted comment:' "$STORAGEPRIMS_MINISIGN_PUB" || {
+export_committed_blob() {
+	local path="$1" output="$2"
+	[[ "$(git -C "$(release_repo_root)" cat-file -t "$commit:$path" 2>/dev/null)" == blob ]] || {
+		echo "error: $path is absent from the tagged commit" >&2
+		exit 1
+	}
+	git -C "$(release_repo_root)" cat-file blob "$commit:$path" >"$output"
+	chmod 0644 "$output"
+	[[ -s "$output" ]] || {
+		echo "error: $path is empty in the tagged commit" >&2
+		exit 1
+	}
+}
+
+export_committed_blob docs/security/storageprims-minisign.pub \
+	"$directory/storageprims-minisign.pub"
+grep -q '^untrusted comment:' "$directory/storageprims-minisign.pub" || {
 	echo "error: minisign public key has an unexpected format" >&2
 	exit 1
 }
-grep -qi 'secret' "$STORAGEPRIMS_MINISIGN_PUB" && {
+grep -qi 'secret' "$directory/storageprims-minisign.pub" && {
 	echo "error: refusing public material containing a secret marker" >&2
 	exit 1
 }
 
-cp "$STORAGEPRIMS_MINISIGN_PUB" "$directory/storageprims-minisign.pub"
-chmod 0644 "$directory/storageprims-minisign.pub"
-
 if [[ -n "${STORAGEPRIMS_PGP_KEY_ID:-}" || -n "${STORAGEPRIMS_GPG_HOMEDIR:-}" ]]; then
 	require_complete_pgp_config
-	gpg --homedir "$STORAGEPRIMS_GPG_HOMEDIR" --batch --armor \
-		--export "$STORAGEPRIMS_PGP_KEY_ID" \
-		>"$directory/storageprims-release-signing-key.asc"
-	[[ -s "$directory/storageprims-release-signing-key.asc" ]] || {
-		echo "error: PGP public-key export is empty" >&2
+	export_committed_blob docs/security/release-signing-keys.asc \
+		"$directory/storageprims-release-signing-key.asc"
+	grep -q 'PRIVATE KEY' "$directory/storageprims-release-signing-key.asc" && {
+		echo "error: refusing public material containing a private key block" >&2
 		exit 1
 	}
 fi

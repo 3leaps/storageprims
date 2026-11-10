@@ -28,6 +28,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   names across S3 `put` and `admit_put`; omit empty S3 metadata maps, reject
   empty and slash-only S3 keys (`"/"`), and project caller-relative keys
   (omitting `root_prefix`) in S3 errors and `CopyResult`.
+- Release CI runs with read-only permissions and publishes only workflow
+  artifacts. The maintainer ceremony stages the artifacts of the verified tag
+  run, creates the draft release, and uploads signatures to that draft after
+  checking its assets byte for byte. Release public keys are copied from the
+  tagged commit, and `docs/security/` documents the verification pins.
 
 ## [0.1.2] - 2026-09-28
 

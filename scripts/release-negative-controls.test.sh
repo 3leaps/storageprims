@@ -28,6 +28,13 @@ fail_if_found() {
 fail_if_found \
 	'cargo[[:space:]]+(publish|login|yank|owner)|CARGO_REGISTRY_TOKEN|CARGO_REGISTRIES_[A-Z0-9_]+_TOKEN|secrets\.|STORAGEPRIMS_(MINISIGN_KEY|PGP_KEY_ID|GPG_HOMEDIR)' \
 	"${1:-.github/workflows}"
+# Workflow write authority, credentials, pins, images and release commands are
+# checked on the parsed YAML (see release-workflow-policy.test.sh).
+if [[ "$#" == 0 ]]; then
+	workflows=()
+	while IFS= read -r -d '' file; do workflows+=("$file"); done < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
+	python3 -I "$root/scripts/release-workflow-policy.py" "${workflows[@]}"
+fi
 fail_if_found \
 	'WAITPRIMS_|SYSPRIMS_' \
 	--glob '!release-negative-controls.test.sh' \
@@ -45,23 +52,17 @@ if [[ "$#" == 0 ]]; then
 		echo 'error: signed-tag verification must be read-only' >&2
 		exit 1
 	}
-	awk '
-		/^  draft:/ {draft=1; next}
-		draft && /needs: \[validate, verify-signature, build-ffi, sbom\]/ {found=1}
-		END {exit !found}
-	' "$workflow" || {
-		echo 'error: draft must depend on signed-tag verification' >&2
-		exit 1
-	}
 fi
 
-mutation_count="$(rg -U -o \
-	'gh release (upload|edit)[^\n]*(\n[^\n]*){0,2}--repo "\$STORAGEPRIMS_REPOSITORY"' \
-	scripts/upload-release-assets.sh | rg -o 'gh release' | wc -l | tr -d ' ')"
-if [[ "$mutation_count" != "2" ]]; then
-	echo "error: every GitHub mutation must pin the repository" >&2
+# Signed-set mutations address the verified release id, never the tag.
+if rg -n 'gh[[:space:]]+release[[:space:]]+(upload|edit|delete)' scripts/upload-release-assets.sh >&2; then
+	echo "error: signed-set mutations must address the verified release id" >&2
 	exit 1
 fi
+[[ "$(rg -c 'releases/\$id' scripts/upload-release-assets.sh)" == 2 ]] || {
+	echo "error: signed-set mutations must address the verified release id" >&2
+	exit 1
+}
 if rg -n --glob '!release-negative-controls.test.sh' \
 	-- '--draft=false|draft:[[:space:]]*false' \
 	scripts .github/workflows/release.yml >/dev/null; then

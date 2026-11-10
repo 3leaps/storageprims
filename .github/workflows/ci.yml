@@ -15,7 +15,7 @@ env:
 jobs:
   fast:
     name: fast
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: ghcr.io/fulmenhq/goneat-tools-runner-glibc@sha256:fe525f286458a7491958f8f3b916ef1b9befb05fa2dae2e37b0c08eb84860bae
       options: --user 1001:1001
@@ -28,7 +28,7 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: Install Rust 1.94.1
@@ -70,7 +70,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             cargo_scope: --workspace
           - runner: ubuntu-latest-arm64-s
@@ -79,7 +79,7 @@ jobs:
           - runner: macos-15
             target: aarch64-apple-darwin
             cargo_scope: --workspace
-          - runner: windows-latest
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
             cargo_scope: --workspace --exclude storageprims-ffi
           - runner: windows-latest-arm64-s
@@ -90,7 +90,7 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: Install Rust 1.94.1
@@ -113,7 +113,7 @@ jobs:
     name: platforms
     if: always()
     needs: platform_smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
@@ -122,13 +122,13 @@ jobs:
         run: test "${{ needs.platform_smoke.result }}" = "success"
   integration-s3:
     name: integration-s3
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: Install Rust 1.94.1
@@ -175,13 +175,13 @@ jobs:
         run: docker compose -f docker-compose.localstack.yml down -v
   publish-check:
     name: publish-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: Install Rust 1.94.1
@@ -198,6 +198,7 @@ jobs:
           command -v jq
           command -v cargo
           command -v rg
+          command -v yq
       - name: Install checksum-pinned Decernor for release tests
         run: |
           tool_dir="$(mktemp -d "$RUNNER_TEMP/decernor.XXXXXX")"

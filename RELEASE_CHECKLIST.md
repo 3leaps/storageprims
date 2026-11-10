@@ -1,8 +1,10 @@
 # Release Checklist
 
-This checklist covers release preparation, the signed tag and unsigned
-draft, and the later maintainer MFA signing ceremony. CI never receives
-signing keys and never publishes a GitHub release.
+This checklist covers release preparation, the signed tag, and the
+maintainer MFA ceremony that creates the draft from verified workflow
+artifacts, signs it, and uploads the signed set. CI runs with read-only
+permissions, never receives signing keys, and never creates or publishes a
+GitHub release.
 Earlier unsigned annotated tags remain historical; signing begins with the
 first cut using this gate.
 
@@ -10,6 +12,10 @@ first cut using this gate.
 
 - `make bootstrap` and `make tools` are green
 - `gh`, minisign, and optional GPG tooling are available
+- `make release-tooling-test` and the ceremony also need bash, `jq`, `rg`,
+  `curl`, `python3` (3.11+), `cargo`, gpg, minisign, a Decernor v0.1.8+ binary
+  (`STORAGEPRIMS_DECERNOR_BIN` or `PATH`), and mikefarah `yq` v4 (Debian's
+  `apt` package named `yq` is a different tool)
 - `gh` is authenticated for `3leaps/storageprims`
 - Approved signing material is loaded from an external secret store without
   printing values or paths
@@ -158,7 +164,7 @@ exported pin fails a post-export check, stop. Confirm the new untracked pin is
 the intended export before removing that failed export; then rerun from the
 beginning. Never overwrite an existing pin.
 
-## 2. Create the signed tag and unsigned draft
+## 2. Create the signed tag
 
 Only after message review, a passing preflight and an explicit tag cue, from
 clean `main` at the preflighted commit, the authorized GitHub user with MFA
@@ -187,15 +193,14 @@ output, not a claim of protection or an exception to signature checks. Neither
 target loads a secret from the repository or creates a tag implicitly during
 the push step. Stop on any failing target; do not replace an existing tag.
 
-- [ ] Confirm the tag workflow is green and its exact unsigned draft exists.
-      Stop on failure; never move or replace a signed tag without a separate
-      explicit maintainer decision.
+- [ ] Confirm the tag workflow is green. Stop on failure; never move or
+      replace a signed tag without a separate explicit maintainer decision.
 - [ ] Confirm the tag has GitHub **Verified** status and the
-      `verify-signature` gate passed before a draft is created
-- [ ] Confirm the GitHub release is still a draft
-- [ ] Confirm it contains the FFI archives from
-      `config/release/ffi-platforms.txt`, CycloneDX SBOM, and both licenses
-- [ ] Do not sign until the draft inventory is complete
+      `verify-signature` job passed
+- [ ] Confirm the run uploaded the `release-identity`, `sbom`, and one
+      `ffi-<platform>` artifact per line of `config/release/ffi-platforms.txt`
+- [ ] Confirm no GitHub release exists yet for the tag; the ceremony creates
+      the draft
 
 ## 3. Maintainer MFA sign and upload
 
@@ -225,18 +230,48 @@ executable throughout the ceremony; `release-verify-keys` re-derives both
 exported publics against the anchors staged into the signed set.
 
 1. Safely empty the repository-owned `dist/release`
-2. Download and structurally validate the exact unsigned draft assets
-3. Add the exact per-cut release notes and staged public fingerprint anchors
-4. Generate exact SHA-256 and SHA-512 manifests
-5. Sign both manifests
-6. Export and prove public verification keys
-7. Verify once, upload the explicit provenance set, and recheck the exact
-   remote inventory
+2. Stage the exact unsigned artifacts of the one successful push run of the
+   tag workflow at the verified tag commit (`make release-fetch`); set
+   `STORAGEPRIMS_RELEASE_RUN_ID` when more than one run qualifies. The
+   artifact release identity must name the verified tag object and commit,
+   and the licenses must equal the tagged commit's
+3. Create a new draft from the staged set and upload it create-only
+   (`make release-draft`); it refuses when any release or draft for the tag
+   exists or its absence cannot be proven from the full release list
+4. Add the exact per-cut release notes and staged public fingerprint anchors
+5. Generate exact SHA-256 and SHA-512 manifests
+6. Sign both manifests
+7. Export and prove public verification keys copied from the tagged commit
+8. Verify once, prove the draft still holds the verified unsigned bytes,
+   upload the explicit provenance set, and recheck the exact remote inventory
 
 Each minisign manifest signature may prompt for the minisign secret-key
 passphrase. The terminal identifies the manifest and prompt purpose; two
 prompts are expected when signing the two manifests. Never paste a passphrase
 or secret-key path into command receipts or release notes.
+
+Recovery after a stop. Never rerun `make release` once a draft exists:
+`release-draft` refuses any existing release or draft for the tag.
+
+- Stopped after `release-draft` completed and before `release-upload` (for
+  example a signing prompt failed): run `make release-resume`. It re-stages the
+  verified workflow artifacts and `release-verify-draft` requires the one draft
+  for the tag to hold exactly those unsigned bytes before anything is signed.
+  Resume re-fetches from the same workflow run: set the same
+  `STORAGEPRIMS_RELEASE_RUN_ID` if the first fetch needed one, and resume while
+  the run's artifacts are retained (30 days). A rerun of the workflow produces
+  different archive bytes; `release-verify-draft` then refuses, and the draft
+  must be deleted and the ceremony restarted.
+- Stopped inside `release-draft` (partial asset upload) or inside
+  `release-upload` (some signed assets uploaded): the draft inventory no longer
+  matches and `release-resume` refuses. Inspect the draft, delete it as a
+  separate explicit maintainer decision, then run `make release` again.
+
+`release-upload` runs `release-verify-draft` before it uploads signatures, so a
+draft asset replaced after creation stops the ceremony. Every upload and the
+notes update address that verified release id, never the tag, and the same
+release must then hold exactly the signed set byte for byte. Do not publish,
+edit, or delete the draft by any other means while the ceremony runs.
 
 - [ ] Confirm the release remains a draft after upload
 - [ ] Independently download into an empty directory and verify both checksum

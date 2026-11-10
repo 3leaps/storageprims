@@ -44,24 +44,23 @@ generated headers are stale locally even though narrower Rust-only checks pass.
 
 ## Release workflow credentials
 
-The tag-triggered release workflow creates the unsigned GitHub draft before the
-local signing ceremony begins. `make release` requires that draft and stops at
-`release-download` when it is absent.
+Every workflow declares `permissions: contents: read`, and no job persists
+checkout credentials. The tag-triggered release workflow restores the
+runner-local annotated tag with the read-only job token (the GitHub API answer
+must agree with origin), verifies it against the public pin committed in the
+tagged commit, and builds the FFI archives and SBOM from that commit. It
+uploads them as workflow artifacts with a `release-identity` record of the tag
+object and commit. It does not create, edit, or publish a GitHub release.
 
-The strict tag-triggered release guard checks the annotated tag against the
-remote tag and `origin/main`. The read-only validation job retains its
-read-scoped checkout credential for that guard. The draft job has a
-write-scoped token, so it provides an authenticated Git header only while
-running the guard and removes that header before later draft steps create or
-update the release.
+Binding the tag to `origin/main` is a maintainer step: the strict guard runs in
+the local ceremony with the maintainer's own credentials. `make release`
+stages the artifacts of the one successful push run of the tag workflow at the
+verified commit, then creates the draft with a create-only request; an
+existing release or draft, an unprovable absence, or a partial upload stops
+for inspection without replacing anything. Before signatures are uploaded,
+the draft's unsigned assets must equal the verified artifacts byte for byte.
 
-After a tag workflow failure, stop and investigate before running `make release`.
-Confirm any draft and its unsigned asset inventory, and use separately authorized
-recovery without recreating or moving a published signed tag. See the
+After a tag workflow failure, stop and investigate before running
+`make release`. Never recreate or move a published signed tag. See the
 [release checklist](../RELEASE_CHECKLIST.md) for the distinct local-tag,
-remote-push, and later signing steps.
-
-After checkout, the tag-triggered workflow restores the runner-local annotated
-ref from origin before validation, signature verification, and draft inventory
-checks. Draft creation uses a create-only request; a release conflict or partial
-asset upload stops for inspection without replacing an existing release.
+remote-push, and signing steps.
