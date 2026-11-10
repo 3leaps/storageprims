@@ -28,6 +28,11 @@ fail_if_found() {
 fail_if_found \
 	'cargo[[:space:]]+(publish|login|yank|owner)|CARGO_REGISTRY_TOKEN|CARGO_REGISTRIES_[A-Z0-9_]+_TOKEN|secrets\.|STORAGEPRIMS_(MINISIGN_KEY|PGP_KEY_ID|GPG_HOMEDIR)' \
 	"${1:-.github/workflows}"
+# Workflows hold no write authority, keep no checkout credentials, and never
+# create or change a GitHub release: the maintainer does that locally.
+fail_if_found \
+	'^[[:space:]]*[a-z-]+:[[:space:]]*write([[:space:]]|$)|permissions:[[:space:]]*write-all|persist-credentials:[[:space:]]*true|gh[[:space:]]+release[[:space:]]|repos/[^[:space:]]+/releases|action-gh-release' \
+	"${1:-.github/workflows}"
 fail_if_found \
 	'WAITPRIMS_|SYSPRIMS_' \
 	--glob '!release-negative-controls.test.sh' \
@@ -43,14 +48,6 @@ if [[ "$#" == 0 ]]; then
 		END {if (!seen) exit 1}
 	' "$workflow" || {
 		echo 'error: signed-tag verification must be read-only' >&2
-		exit 1
-	}
-	awk '
-		/^  draft:/ {draft=1; next}
-		draft && /needs: \[validate, verify-signature, build-ffi, sbom\]/ {found=1}
-		END {exit !found}
-	' "$workflow" || {
-		echo 'error: draft must depend on signed-tag verification' >&2
 		exit 1
 	}
 fi
@@ -74,7 +71,11 @@ if [[ "$#" == 0 ]]; then
 	fixture="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-workflow-control.XXXXXX")"
 	trap 'rm -rf "$fixture"' EXIT
 	for forbidden in 'cargo publish' 'cargo login' 'cargo yank' 'cargo owner' \
-		'CARGO_REGISTRY_TOKEN' 'CARGO_REGISTRIES_CRATES_IO_TOKEN' 'secrets.REGISTRY'; do
+		'CARGO_REGISTRY_TOKEN' 'CARGO_REGISTRIES_CRATES_IO_TOKEN' 'secrets.REGISTRY' \
+		'  contents: write' '      id-token: write' 'permissions: write-all' \
+		'          persist-credentials: true' 'run: gh release create v1.2.3' \
+		'run: gh api --method POST repos/o/r/releases' \
+		'uses: softprops/action-gh-release@0000000000000000000000000000000000000000'; do
 		printf '%s\n' "$forbidden" >"$fixture/fixture.yml"
 		if bash "$0" "$fixture" >/dev/null 2>&1; then
 			echo "error: workflow negative control missed $forbidden" >&2

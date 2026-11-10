@@ -563,6 +563,7 @@ release-crates-verify: ## Wait for the final registry version and verify each pu
 release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/sign-release-assets.test.sh
 	@./scripts/release-restore-tag-ref.test.sh
+	@./scripts/export-release-keys.test.sh
 	@./scripts/release-create-draft.test.sh
 	@./scripts/release-decernor.test.sh
 	@./scripts/release-pin-precursors.test.sh
