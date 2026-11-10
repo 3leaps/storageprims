@@ -6,7 +6,8 @@ local disk, to stage files before they go to a bucket, or to test storage code
 without a network (see [Testing with the local provider](testing-with-the-local-provider.md)).
 
 `storageprims-local` is first published with storageprims 0.2.0. Until that
-release, depend on the repository:
+release, depend on the repository (this tracks `main`; add `rev = "<commit>"` to
+pin one):
 
 ```toml
 [dependencies]
@@ -82,7 +83,8 @@ system's no-replace rename (macOS, Linux and Android, and Windows), so two
 writers racing for the same key cannot both succeed. The loser gets
 `StorageError::Conflict { kind: ConflictKind::AlreadyExists, .. }`. If the
 underlying filesystem does not support a no-replace rename, the write fails
-with `ProviderUnavailable` rather than falling back to check-then-rename. On
+with `ProviderUnavailable` (on Windows, an `Io` error) rather than falling back
+to check-then-rename. On
 other Unix systems the provider does not advertise `Capability::ConditionalPut`
 and refuses `MustNotExist` with `UnsupportedCapability` instead of emulating it.
 
