@@ -29,7 +29,8 @@ done
 for name in GH_HOST GH_REPO GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN; do
 	[[ -z "${!name+x}" ]] || die "$name is set; the preflight talks to github.com only"
 done
-socket="$(gh config get http_unix_socket -h github.com 2>/dev/null || true)"
+socket="$(gh config get http_unix_socket -h github.com 2>/dev/null)" ||
+	die 'could not read the gh configuration for github.com'
 [[ -z "$socket" ]] || die 'gh is configured with http_unix_socket; the preflight requires a direct github.com transport'
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-gh-preflight.XXXXXX")"

@@ -32,6 +32,7 @@ cat >"$scratch/bin/gh" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "\$1 \$2 \$3" == 'config get http_unix_socket' ]]; then
+	[[ -f "$api/socket" ]] || exit 1
 	cat "$api/socket"
 	exit 0
 fi
@@ -134,10 +135,17 @@ printf '%s\n' '[{"id":7,"name":"Tag Publish Protection"}]' >"$api/rulesets.json"
 refused 'unexpected response shape from repos/3leaps/storageprims/rulesets'
 printf '%s\n' '[{"a":{"id":7,"name":"Tag Publish Protection"}}]' >"$api/rulesets.json"
 refused 'unexpected response shape from repos/3leaps/storageprims/rulesets'
+printf '%s\n%s\n' '[[{"id":9,"name":"Tag Publish Protection"}]]' \
+	'[[{"id":7,"name":"Tag Publish Protection"}]]' >"$api/rulesets.json"
+refused 'unexpected response shape from repos/3leaps/storageprims/rulesets'
+printf '%s\n' '[[{"id":7,"name":"Tag Publish Protection"},"stray"]]' >"$api/rulesets.json"
+refused 'unexpected response shape from repos/3leaps/storageprims/rulesets'
 
 # Transport and host overrides.
 printf '%s\n' /tmp/proxy.sock >"$api/socket"
 refused 'gh is configured with http_unix_socket'
+rm "$api/socket"
+refused 'could not read the gh configuration'
 for name in GH_HOST GH_REPO GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN; do
 	cases=$((cases + 1))
 	if env "$name=x" bash "$root/scripts/release-github-preflight.sh" >"$scratch/out" 2>&1; then
