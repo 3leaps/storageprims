@@ -38,7 +38,7 @@ awk -v primary="$primary" -v selector="${STORAGEPRIMS_PGP_KEY_ID:-}" '
   $1=="[GNUPG:]" && $2 ~ /^(EXPKEYSIG|EXPSIG|REVKEYSIG|KEYREVOKED|BADSIG|ERRSIG)$/ {bad++}
   END {
     if (bad || good!=1 || valid!=1 || signer_primary!=primary || subkey==primary) exit 1
-    if (selector!="" && (selector !~ /^[0-9A-F]{40}!$/ || subkey "!" != selector)) exit 1
+    if (selector!="" && (length(selector)!=41 || selector !~ /^[0-9A-F]+!$/ || subkey "!" != selector)) exit 1
   }
 ' "$keyring/status" || die 'signing subkey, expiry or revocation check failed'
 echo '[ok] signed tag verified against committed public pin'
