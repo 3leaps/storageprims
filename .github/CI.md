@@ -16,10 +16,12 @@ stable `platforms` job requires all five matrix cells to pass.
 | `integration-s3` | every push/PR | required S3 behavior against LocalStack                                                         |
 | `publish-check`  | every push/PR | required packaging and verification of every publishable workspace crate without publishing     |
 
-The publish check creates and verifies the `storageprims-core`, `storageprims-ops`,
-and `storageprims-s3` archives in an isolated target directory. For the initial
-staged release, a command-line-only Cargo registry patch supplies the unpublished
-core crate while verifying the dependent packages. The generated manifests are
+The publish check creates and verifies an archive for every crate in
+`config/release/publishable-crates.txt` (`storageprims-core`,
+`storageprims-s3`, `storageprims-local`, `storageprims-ops`) in an isolated
+target directory. Because the new version is not on crates.io yet, a
+command-line-only Cargo registry patch supplies the earlier crates in the list
+while verifying the ones that depend on them. The generated manifests are
 checked to retain the registry version and omit the local dependency path.
 
 All jobs use the workspace MSRV, Rust 1.94.1. The Linux quality job uses the

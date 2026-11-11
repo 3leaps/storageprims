@@ -32,22 +32,22 @@ Part of the **3leaps prims family**:
 
 ## Implementation Status
 
-| Surface                                                     | Status                                        |
-| ----------------------------------------------------------- | --------------------------------------------- |
-| Rust core contracts and line-oriented operations            | Implemented                                   |
-| AWS S3 and S3-compatible provider                           | Implemented                                   |
-| Local filesystem provider (`storageprims-local`)            | Implemented on main (Rust; planned for 0.2.0) |
-| Bounded single-object relay between providers               | Implemented on main (Rust; planned for 0.2.0) |
-| List, head, get, range get, put, delete, and S3-native copy | Implemented                                   |
-| Provider-enforced conditional put                           | Implemented                                   |
-| Root-prefix containment for listing and object operations   | Implemented                                   |
-| C ABI control JSON and descriptor/pipe streaming            | Implemented on Unix/POSIX                     |
-| Portable Rust crates on Windows                             | Implemented and native-tested                 |
-| Windows C ABI                                               | Planned                                       |
-| Go and TypeScript bindings                                  | Planned                                       |
-| GCS, Azure Blob, and CLI crates                             | Planned                                       |
-| Multipart upload                                            | Planned                                       |
-| Rust delimiter/common-prefix listing (S3 and local)         | Implemented (Rust only)                       |
+| Surface                                                     | Status                        |
+| ----------------------------------------------------------- | ----------------------------- |
+| Rust core contracts and line-oriented operations            | Implemented                   |
+| AWS S3 and S3-compatible provider                           | Implemented                   |
+| Local filesystem provider (`storageprims-local`)            | Implemented (Rust)            |
+| Bounded single-object relay between providers               | Implemented (Rust)            |
+| List, head, get, range get, put, delete, and S3-native copy | Implemented                   |
+| Provider-enforced conditional put                           | Implemented                   |
+| Root-prefix containment for listing and object operations   | Implemented                   |
+| C ABI control JSON and descriptor/pipe streaming            | Implemented on Unix/POSIX     |
+| Portable Rust crates on Windows                             | Implemented and native-tested |
+| Windows C ABI                                               | Planned                       |
+| Go and TypeScript bindings                                  | Planned                       |
+| GCS, Azure Blob, and CLI crates                             | Planned                       |
+| Multipart upload                                            | Planned                       |
+| Rust delimiter/common-prefix listing (S3 and local)         | Implemented (Rust only)       |
 
 ## Quick Start (Rust)
 
@@ -147,13 +147,23 @@ Provider follow-on work should use the reusable hardening checklist in [docs/pro
 
 ## Releases
 
-The first release is distributed as signed GitHub assets and can be pinned
-directly from git. The Rust crates are not published on crates.io in this cut.
+Each release is a signed git tag with signed GitHub release assets, and the
+Rust crates are published on crates.io:
 
 ```toml
-storageprims-core = { git = "https://github.com/3leaps/storageprims", tag = "v0.1.0" }
-storageprims-ops = { git = "https://github.com/3leaps/storageprims", tag = "v0.1.0" }
-storageprims-s3 = { git = "https://github.com/3leaps/storageprims", tag = "v0.1.0" }
+storageprims-core = "0.2"
+storageprims-s3 = "0.2"
+storageprims-local = "0.2"
+storageprims-ops = "0.2"
+```
+
+To build from the signed tag instead:
+
+```toml
+storageprims-core = { git = "https://github.com/3leaps/storageprims", tag = "v0.2.0" }
+storageprims-s3 = { git = "https://github.com/3leaps/storageprims", tag = "v0.2.0" }
+storageprims-local = { git = "https://github.com/3leaps/storageprims", tag = "v0.2.0" }
+storageprims-ops = { git = "https://github.com/3leaps/storageprims", tag = "v0.2.0" }
 ```
 
 Each GitHub release includes SHA-256 and SHA-512 manifests, minisign

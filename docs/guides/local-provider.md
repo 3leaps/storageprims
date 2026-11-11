@@ -5,16 +5,18 @@ same `StorageProvider` contract as the S3 provider. Use it to keep data on
 local disk, to stage files before they go to a bucket, or to test storage code
 without a network (see [Testing with the local provider](testing-with-the-local-provider.md)).
 
-`storageprims-local` is not in a tagged release yet; it is planned for
-storageprims 0.2.0. Until then, depend on the repository (this tracks `main`; add `rev = "<commit>"` to
-pin one):
+`storageprims-local` is available from storageprims 0.2.0:
 
 ```toml
 [dependencies]
-storageprims-core = { git = "https://github.com/3leaps/storageprims" }
-storageprims-local = { git = "https://github.com/3leaps/storageprims" }
+storageprims-core = "0.2"
+storageprims-local = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
+
+To build from the signed tag instead, use
+`{ git = "https://github.com/3leaps/storageprims", tag = "v0.2.0" }` for each
+crate.
 
 Tests that use `#[tokio::test]` need `tokio` with
 `macros` and `rt` (or `rt-multi-thread`) as a dev-dependency.
