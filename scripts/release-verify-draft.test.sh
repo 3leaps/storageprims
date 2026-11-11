@@ -45,6 +45,9 @@ assets_json='[{"id":101,"name":"LICENSE-MIT"},{"id":102,"name":"storageprims-ffi
 export assets_json
 cat >"$scratch/bin/gh" <<'SH'
 #!/usr/bin/env bash
+[[ "$1 $2 $3" == 'api --hostname github.com' ]] || { echo 'error: unpinned GitHub host' >&2; exit 1; }
+shift 3
+set -- api "$@"
 set -euo pipefail
 args=("$@")
 jq_filter=''

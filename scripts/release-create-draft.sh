@@ -34,7 +34,7 @@ main() {
 	# Absence is proven from the full release list, which includes drafts only
 	# for a caller with push access; GET releases/tags/<tag> returns 404 for a
 	# draft and is not an absence proof. Any listing failure is not absence.
-	[[ "$(gh api repos/3leaps/storageprims --jq .permissions.push 2>/dev/null)" == true ]] || {
+	[[ "$(gh api --hostname github.com repos/3leaps/storageprims --jq .permissions.push 2>/dev/null)" == true ]] || {
 		echo 'error: release absence is unknown: the GitHub identity cannot see drafts' >&2
 		exit 1
 	}
@@ -43,7 +43,7 @@ main() {
 		exit 1
 	}
 	local existing
-	existing="$(gh api --paginate 'repos/3leaps/storageprims/releases?per_page=100' --jq ".[] | select(.tag_name == \"$tag\" or (.draft == true and (.tag_name | startswith(\"untagged-\")) and .target_commitish == \"$commit\")) | .id")" || {
+	existing="$(gh api --hostname github.com --paginate 'repos/3leaps/storageprims/releases?per_page=100' --jq ".[] | select(.tag_name == \"$tag\" or (.draft == true and (.tag_name | startswith(\"untagged-\")) and .target_commitish == \"$commit\")) | .id")" || {
 		echo 'error: release absence is unknown: the release list could not be read' >&2
 		exit 1
 	}
@@ -76,7 +76,7 @@ main() {
 
 	# POST /releases creates a new release or fails. Unlike action-gh-release,
 	# it has no update-on-existing path. Do not retry a failed or partial create.
-	response="$(gh api --method POST repos/3leaps/storageprims/releases \
+	response="$(gh api --hostname github.com --method POST repos/3leaps/storageprims/releases \
 		-f "tag_name=$tag" -f "target_commitish=$commit" \
 		-f "body=$(cat "$notes")" -F draft=true -F prerelease=false)" || {
 		echo 'error: create-only draft request failed; inspect remote state before any retry' >&2
@@ -111,7 +111,7 @@ PYRECORD
 			echo 'error: unsafe release asset; draft may be partial' >&2
 			exit 1
 		}
-		asset="$(gh api --method POST \
+		asset="$(gh api --hostname github.com --method POST \
 			-H 'Content-Type: application/octet-stream' \
 			"https://uploads.github.com/repos/3leaps/storageprims/releases/$id/assets?name=$name" \
 			--input "$directory/$name")" || {

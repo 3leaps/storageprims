@@ -26,6 +26,9 @@ assert_github_release_state() {
 SH
 cat >"$scratch/bin/gh" <<'SH'
 #!/usr/bin/env bash
+[[ "$1 $2 $3" == 'api --hostname github.com' ]] || { echo 'error: unpinned GitHub host' >&2; exit 1; }
+shift 3
+set -- api "$@"
 set -eo pipefail
 case "$*" in
 # Like GitHub: the tags endpoint 404s for a draft, so it must never be the proof.

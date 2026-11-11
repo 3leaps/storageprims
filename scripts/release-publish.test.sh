@@ -35,6 +35,9 @@ FIXTURE_COMMIT="$(git -C "$repo" rev-parse HEAD)"
 export FIXTURE_COMMIT
 cat >"$scratch/bin/gh" <<'STUB'
 #!/usr/bin/env bash
+[[ "$1 $2 $3" == 'api --hostname github.com' ]] || { echo 'error: unpinned GitHub host' >&2; exit 1; }
+shift 3
+set -- api "$@"
 set -euo pipefail
 state() {
  jq -n --arg commit "$FIXTURE_COMMIT" --arg tag "${MOCK_TAG:-v1.2.3}"   --arg body "${MOCK_BODY:-Fixture notes}" --argjson prerelease "${MOCK_PRERELEASE:-false}" --argjson immutable "${MOCK_IMMUTABLE:-true}" --argjson id "${MOCK_ID:-55}"   '{id:$id,tag_name:$tag,target_commitish:$commit,draft:false,immutable:$immutable,prerelease:$prerelease,body:($body+"\n")}'

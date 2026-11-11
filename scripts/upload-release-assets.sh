@@ -37,7 +37,7 @@ while IFS= read -r asset; do
 		echo "error: unsafe signed asset; draft may be partial" >&2
 		exit 1
 	}
-	response="$(gh api --method POST \
+	response="$(gh api --hostname github.com --method POST \
 		-H 'Content-Type: application/octet-stream' \
 		"https://uploads.github.com/repos/$STORAGEPRIMS_REPOSITORY/releases/$id/assets?name=$asset" \
 		--input "$directory/$asset")" || {
@@ -57,7 +57,7 @@ notes="$directory/release-notes-${tag}.md"
 	exit 1
 }
 response="$(jq -n --arg tag "$tag" --rawfile body "$notes" '{body: $body, tag_name: $tag, draft: true}' |
-	gh api --method PATCH "repos/$STORAGEPRIMS_REPOSITORY/releases/$id" --input -)" || {
+	gh api --hostname github.com --method PATCH "repos/$STORAGEPRIMS_REPOSITORY/releases/$id" --input -)" || {
 	echo "error: release notes update failed; inspect the draft" >&2
 	exit 1
 }

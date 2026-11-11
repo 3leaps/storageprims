@@ -237,7 +237,7 @@ assert_github_release_state() (
 			return 1
 		}
 	done
-	if [[ "$(gh repo view "$STORAGEPRIMS_REPOSITORY" \
+	if [[ "$(gh repo view "github.com/$STORAGEPRIMS_REPOSITORY" \
 		--json nameWithOwner --jq .nameWithOwner)" != "$STORAGEPRIMS_REPOSITORY" ]]; then
 		echo "error: GitHub repository identity mismatch" >&2
 		return 1
@@ -248,7 +248,7 @@ assert_github_release_state() (
 	expected="$(mktemp "${TMPDIR:-/tmp}/storageprims-remote-expected.XXXXXX")"
 	actual="$(mktemp "${TMPDIR:-/tmp}/storageprims-remote-actual.XXXXXX")"
 	trap 'rm -f "$state" "$expected" "$actual"' EXIT
-	gh release view "$tag" --repo "$STORAGEPRIMS_REPOSITORY" \
+	gh release view "$tag" --repo "github.com/$STORAGEPRIMS_REPOSITORY" \
 		--json tagName,targetCommitish,isDraft,assets >"$state"
 
 	if [[ "$(jq -r .tagName "$state")" != "$tag" ||

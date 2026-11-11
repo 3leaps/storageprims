@@ -32,16 +32,16 @@ STORAGEPRIMS_EXPECTED_DRAFT_ID="$id" "$SCRIPT_DIR/release-verify-draft.sh" "$dir
 notes="$directory/release-notes-${tag}.md"
 [[ -s "$notes" && ! -L "$notes" ]] || die 'signed release notes are absent'
 response="$(jq -n --arg tag "$tag" --rawfile body "$notes" '{tag_name: $tag, body: $body, draft: false, prerelease: false, make_latest: "true"}' |
-	gh api --method PATCH "repos/$STORAGEPRIMS_REPOSITORY/releases/$id" --input -)" ||
+	gh api --hostname github.com --method PATCH "repos/$STORAGEPRIMS_REPOSITORY/releases/$id" --input -)" ||
 	die 'publication request failed; inspect remote state before any retry'
 jq -e --argjson id "$id" --arg tag "$tag" --arg commit "$commit" --rawfile body "$notes" '.id == $id and .tag_name == $tag and .target_commitish == $commit and .draft == false and .immutable == true and .prerelease == false and .body == $body' <<<"$response" >/dev/null || die 'publication response mismatch; inspect remote state'
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-published.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
-gh api "repos/$STORAGEPRIMS_REPOSITORY/releases/tags/$tag" >"$scratch/release" ||
+gh api --hostname github.com "repos/$STORAGEPRIMS_REPOSITORY/releases/tags/$tag" >"$scratch/release" ||
 	die 'published release could not be read'
 jq -e --argjson id "$id" --arg tag "$tag" --arg commit "$commit" --rawfile body "$notes" '.id == $id and .tag_name == $tag and .target_commitish == $commit and .draft == false and .immutable == true and .prerelease == false and .body == $body' "$scratch/release" >/dev/null || die 'published release identity or immutability mismatch'
-gh api --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases/$id/assets?per_page=100" --jq '.[].name' | LC_ALL=C sort >"$scratch/actual"
+gh api --hostname github.com --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases/$id/assets?per_page=100" --jq '.[].name' | LC_ALL=C sort >"$scratch/actual"
 release_signed_assets | LC_ALL=C sort >"$scratch/expected"
 cmp -s "$scratch/expected" "$scratch/actual" || die 'published asset inventory mismatch'
 echo "[ok] immutable release $tag published with the exact signed asset inventory"

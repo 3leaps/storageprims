@@ -30,6 +30,9 @@ SH
 chmod +x "$repo/scripts/"*.sh
 cat >"$scratch/bin/gh" <<'SH'
 #!/usr/bin/env bash
+[[ "$1 $2 $3" == 'api --hostname github.com' ]] || { echo 'error: unpinned GitHub host' >&2; exit 1; }
+shift 3
+set -- api "$@"
 set -euo pipefail
 case "$*" in
 *'--method POST -H Content-Type: application/octet-stream https://uploads.github.com/repos/3leaps/storageprims/releases/55/assets?name='*)

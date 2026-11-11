@@ -55,11 +55,11 @@ else
 fi
 
 # Drafts are listed only for a caller with push access.
-[[ "$(gh api "repos/$STORAGEPRIMS_REPOSITORY" --jq .permissions.push 2>/dev/null)" == true ]] ||
+[[ "$(gh api --hostname github.com "repos/$STORAGEPRIMS_REPOSITORY" --jq .permissions.push 2>/dev/null)" == true ]] ||
 	die 'the GitHub identity cannot see drafts'
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-draft-verify.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
-gh api --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases?per_page=100" \
+gh api --hostname github.com --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases?per_page=100" \
 	--jq ".[] | select(.tag_name == \"$tag\") | {id, draft, target_commitish, prerelease, body}" >"$scratch/matches" ||
 	die 'the release list could not be read'
 [[ "$(jq -s length "$scratch/matches")" == 1 ]] || die 'expected exactly one release for the tag'
@@ -75,7 +75,7 @@ fi
 id="$(jq -r .id "$scratch/matches")"
 [[ -z "$expected_id" || "$id" == "$expected_id" ]] || die 'the draft for the tag is not the verified release'
 
-gh api --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases/$id/assets?per_page=100" \
+gh api --hostname github.com --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases/$id/assets?per_page=100" \
 	--jq '.[] | "\(.id)\t\(.name)"' >"$scratch/assets" || die 'the draft asset list could not be read'
 cut -f2 "$scratch/assets" | LC_ALL=C sort >"$scratch/actual"
 "$expected_assets" | LC_ALL=C sort >"$scratch/expected"
@@ -86,7 +86,7 @@ cmp -s "$scratch/expected" "$scratch/actual" || {
 while IFS=$'\t' read -r asset_id name; do
 	[[ "$asset_id" =~ ^[1-9][0-9]*$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die 'unsafe draft asset entry'
 	[[ -f "$directory/$name" && ! -L "$directory/$name" ]] || die "staged $name is missing"
-	gh api -H 'Accept: application/octet-stream' \
+	gh api --hostname github.com -H 'Accept: application/octet-stream' \
 		"repos/$STORAGEPRIMS_REPOSITORY/releases/assets/$asset_id" >"$scratch/download" ||
 		die "draft asset $name could not be downloaded"
 	cmp -s "$scratch/download" "$directory/$name" ||
