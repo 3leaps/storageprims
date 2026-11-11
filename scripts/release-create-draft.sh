@@ -57,6 +57,23 @@ main() {
 		exit 1
 	}
 
+	# Reserve writable storage before creating anything remotely. An existing
+	# read-only regular record can be replaced atomically; never truncate it.
+	command -v python3 >/dev/null || {
+		echo 'error: python3 is required' >&2
+		exit 1
+	}
+	local draft_tmp
+	draft_tmp="$(mktemp "$root/dist/.release.draft.XXXXXX")" || {
+		echo 'error: cannot reserve draft identity record; no draft created' >&2
+		exit 1
+	}
+	trap 'rm -f -- "${draft_tmp:-}"' EXIT
+	printf 'pending creation identity\n' >"$draft_tmp" || {
+		echo 'error: cannot write reserved draft identity record; no draft created' >&2
+		exit 1
+	}
+
 	# POST /releases creates a new release or fails. Unlike action-gh-release,
 	# it has no update-on-existing path. Do not retry a failed or partial create.
 	response="$(gh api --method POST repos/3leaps/storageprims/releases \
@@ -73,11 +90,19 @@ main() {
 		exit 1
 	}
 
-	[[ ! -L "$root/dist/release.draft" && (! -e "$root/dist/release.draft" || -f "$root/dist/release.draft") ]] || {
-		echo "error: draft record is not a regular file" >&2
+	python3 -I - "$draft_tmp" "$root/dist/release.draft" "$id" <<'PYRECORD' || {
+import os
+import sys
+temporary, destination, identity = sys.argv[1:]
+with open(temporary, "w", encoding="ascii") as record:
+    record.write(f"id={identity}\n")
+    record.flush()
+    os.fsync(record.fileno())
+os.replace(temporary, destination)
+PYRECORD
+		echo "error: draft $id created but identity record persistence failed; inspect before retrying" >&2
 		exit 1
 	}
-	printf 'id=%s\n' "$id" >"$root/dist/release.draft"
 
 	# Upload only the exact, previously validated base inventory. Uploading by
 	# release ID cannot target a different release. No --clobber or overwrite path.
