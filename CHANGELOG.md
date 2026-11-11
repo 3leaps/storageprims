@@ -48,6 +48,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Add guides under `docs/guides/` for how the crates fit together, the local
   provider, testing with the local provider, and location-independent code,
   with runnable `local_roundtrip` and `portable_store` examples.
+- `storageprims-local` requires `rustix` 1.1.6 or newer (RUSTSEC-2026-0486).
 
 ## [0.1.2] - 2026-09-28
 
