@@ -208,8 +208,11 @@ the push step. Stop on any failing target; do not replace an existing tag.
 
 - [ ] Confirm the tag workflow is green. Stop on failure; never move or
       replace a signed tag without a separate explicit maintainer decision.
+      Rerun a failed workflow only before a draft exists. Once a draft exists,
+      preserve its original workflow run and attempt; follow the recovery
+      procedure instead of replacing its artifact bytes with a new run.
 - [ ] Confirm the tag has GitHub **Verified** status and the
-      `verify-signature` job passed
+      **Verify pinned tag signature** (`verify-signature`) job passed
 - [ ] Confirm the run uploaded the `release-identity`, `sbom`, and one
       `ffi-<platform>` artifact per line of `config/release/ffi-platforms.txt`
 - [ ] Confirm no GitHub release exists yet for the tag; the ceremony creates
@@ -225,6 +228,7 @@ guard peels the annotated tag and requires the tag, `HEAD`, and fetched
 : "${STORAGEPRIMS_RELEASE_TAG:?load the approved release tag}"
 : "${STORAGEPRIMS_MINISIGN_KEY:?load the approved secret key}"
 : "${STORAGEPRIMS_MINISIGN_PUB:?load the approved public key}"
+: "${STORAGEPRIMS_DECERNOR_BIN:?load the approved absolute Decernor executable}"
 test -z "$(git status --porcelain)"
 git fetch origin \
   "+refs/heads/main:refs/remotes/origin/main" \
@@ -417,9 +421,8 @@ With no `@version`, an explicit registry query shows the latest version, not
 necessarily this cut. Never use bare `cargo info` as registry proof: it may
 resolve a local workspace crate. Review the registry pages and **separately**
 check docs.rs builds for this version; index/API success does not establish a
-documentation build. If the tag Release
-workflow's package check failed while registry dependencies were unavailable,
-rerun it after the index exposes this version, before signing the draft.
+documentation build. The tag workflow's package checks use local dependency
+patches and do not wait for this version to appear in the registry.
 
 ### Return to the starting branch
 
@@ -436,6 +439,15 @@ Do not reset or discard unexpected work. If using a separate detached worktree,
 remove it only after confirming it contains no work to preserve. Returning to a
 branch before finishing the ceremony causes the strict detached-checkout guard
 to fail.
+
+### Complete the release record
+
+- [ ] Record the published tag and commit, artifact verification, registry
+      checks, and documentation-build results
+- [ ] Notify consumers that the version and its release notes are available
+- [ ] Confirm release worktrees contain no work to preserve, then remove
+      completed disposable worktrees and local branches as appropriate
+- [ ] Confirm the release handoff is complete before ending the ceremony
 
 ## Rotate release signing keys
 
