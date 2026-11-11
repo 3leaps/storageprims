@@ -376,7 +376,8 @@ inspect registry state before retrying. Do not include token values in receipts.
 ### Publish one crate at a time — confirm the actual list output
 
 The literal examples below match the current `make release-crates-list` order:
-**core → s3 → ops**, including the ops development dependency on s3. Confirm
+**core → s3 → local → ops**, including the ops development dependencies on s3
+and local. Confirm
 that output before following the examples. The maintainer runs each approved
 publication with the scoped token loaded only for that command. Stop on any
 failure or intervening hold; do not paste the entire sequence as a batch.
@@ -401,7 +402,20 @@ cargo publish --locked -p storageprims-s3
 make release-crates-verify CRATE=storageprims-s3
 ```
 
-Only after s3 verification succeeds, run ops and the final all-list check:
+Only after s3 verification succeeds, run local. This is the first upload of
+`storageprims-local`: confirm the name is unclaimed immediately before
+publishing, and use a token that allows new crates.
+
+```bash
+STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
+make release-verify-remote-tag
+cargo info --registry crates-io storageprims-local
+cargo publish --dry-run --locked -p storageprims-local
+cargo publish --locked -p storageprims-local
+make release-crates-verify CRATE=storageprims-local
+```
+
+Only after local verification succeeds, run ops and the final all-list check:
 
 ```bash
 STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version

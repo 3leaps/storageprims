@@ -31,11 +31,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `Evidence::Unavailable` when `x-amz-missing-meta` is nonzero),
   `AdmittedPutProvider` (`max_attempts = 1` and final-fragment withholding),
   and `DelimiterListingProvider::supports_delimiter`.
-- Enforce the 5 GiB single-`PutObject` ceiling (reported by `put_support()`),
-  US-ASCII header field values, and case-insensitively unique user metadata
-  names across S3 `put` and `admit_put`; omit empty S3 metadata maps, reject
-  empty and slash-only S3 keys (`"/"`), and project caller-relative keys
-  (omitting `root_prefix`) in S3 errors and `CopyResult`.
+- Breaking (behaviour): enforce the 5 GiB single-`PutObject` ceiling (reported
+  by `put_support()`), US-ASCII header field values, and case-insensitively
+  unique user metadata names across S3 `put` and `admit_put`; omit empty S3
+  metadata maps, reject empty and slash-only provider-relative S3 keys
+  (`"/"`), and project caller-relative keys (omitting `root_prefix`) in S3
+  errors and `CopyResult`.
 - Release CI runs with read-only permissions and publishes only workflow
   artifacts. The maintainer ceremony stages the artifacts of the verified tag
   run, creates the draft release, and uploads signatures to that draft after

@@ -147,8 +147,8 @@ Provider follow-on work should use the reusable hardening checklist in [docs/pro
 
 ## Releases
 
-Each release is a signed git tag with signed GitHub release assets, and the
-Rust crates are published on crates.io:
+Releases are signed git tags with signed GitHub release assets. Since
+v0.1.2 the Rust crates are also published on crates.io:
 
 ```toml
 storageprims-core = "0.2"

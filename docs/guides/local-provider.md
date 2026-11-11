@@ -109,9 +109,11 @@ path.
   no Unicode normalization or case folding.
 - `max_keys` of `None` or `0` means 1000; values above 1000 are refused.
 - Each `list` or `list_delimited` call may examine at most 100,000 directory
-  entries and run for at most 10 seconds. A request that would exceed either
-  limit fails with `StorageError::Inspection` rather than returning a partial
-  page. Every entry in each directory the walk opens counts, including entries
+  entries and is checked against a 10-second deadline between filesystem
+  steps. A request that exceeds either limit fails with
+  `StorageError::Inspection` rather than returning a partial page. A stalled
+  filesystem call cannot be interrupted, so a request can take longer than 10
+  seconds before it fails. Every entry in each directory the walk opens counts, including entries
   that do not match the prefix, so a single directory with more than 100,000
   entries cannot be listed even with a narrow prefix. Spread keys across
   `/`-separated segments to keep each directory well below that.
