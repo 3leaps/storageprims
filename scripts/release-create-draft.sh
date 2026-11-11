@@ -38,13 +38,17 @@ main() {
 		echo 'error: release absence is unknown: the GitHub identity cannot see drafts' >&2
 		exit 1
 	}
+	[[ ! -L "$root/dist/release.draft" && (! -e "$root/dist/release.draft" || -f "$root/dist/release.draft") ]] || {
+		echo "error: draft record is not a regular file" >&2
+		exit 1
+	}
 	local existing
-	existing="$(gh api --paginate 'repos/3leaps/storageprims/releases?per_page=100' --jq '.[].tag_name')" || {
+	existing="$(gh api --paginate 'repos/3leaps/storageprims/releases?per_page=100' --jq ".[] | select(.tag_name == \"$tag\" or (.draft == true and (.tag_name | startswith(\"untagged-\")) and .target_commitish == \"$commit\")) | .id")" || {
 		echo 'error: release absence is unknown: the release list could not be read' >&2
 		exit 1
 	}
-	if grep -Fxq -- "$tag" <<<"$existing"; then
-		echo 'error: a release or draft for this tag already exists; inspect it before any retry' >&2
+	if [[ -n "$existing" ]]; then
+		echo 'error: a release or draft for this tag already exists, or an untagged draft targets its commit; inspect it before any retry' >&2
 		exit 1
 	fi
 	notes="docs/releases/$tag.md"
@@ -68,6 +72,12 @@ main() {
 		echo 'error: created release response did not match the requested draft; inspect remote state' >&2
 		exit 1
 	}
+
+	[[ ! -L "$root/dist/release.draft" && (! -e "$root/dist/release.draft" || -f "$root/dist/release.draft") ]] || {
+		echo "error: draft record is not a regular file" >&2
+		exit 1
+	}
+	printf 'id=%s\n' "$id" >"$root/dist/release.draft"
 
 	# Upload only the exact, previously validated base inventory. Uploading by
 	# release ID cannot target a different release. No --clobber or overwrite path.

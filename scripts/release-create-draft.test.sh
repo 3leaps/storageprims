@@ -26,6 +26,7 @@ assert_github_release_state() {
 SH
 cat >"$scratch/bin/gh" <<'SH'
 #!/usr/bin/env bash
+set -eo pipefail
 case "$*" in
 # Like GitHub: the tags endpoint 404s for a draft, so it must never be the proof.
 'api repos/3leaps/storageprims/releases/tags/v1.2.3')
@@ -34,13 +35,14 @@ case "$*" in
 'api repos/3leaps/storageprims --jq .permissions.push')
 	printf 'perms\n' >>"$MOCK_CALLS"
 	[[ "${MOCK_PUSH:-true}" == true ]] && printf 'true\n' || printf 'false\n' ;;
-"api --paginate repos/3leaps/storageprims/releases?per_page=100 --jq .[].tag_name")
+'api --paginate repos/3leaps/storageprims/releases?per_page=100 --jq '*)
 	printf 'list\n' >>"$MOCK_CALLS"
 	case "${MOCK_LIST:-absent}" in
-	absent) printf 'v1.2.2\nv1.2.30\n' ;;
-	draft) printf 'v1.2.2\nv1.2.3\n' ;;
+	absent) printf '[{"id":1,"tag_name":"v1.2.2","draft":false}]' ;;
+ orphan) printf '[{"id":2,"tag_name":"untagged-fixture","draft":true,"target_commitish":"%s"}]' "$FIXTURE_COMMIT" ;;
+	draft) printf '[{"id":3,"tag_name":"v1.2.3","draft":true}]' ;;
 	fail) printf 'gh: HTTP 502\n' >&2; exit 1 ;;
-	esac ;;
+	esac | jq -r "${@: -1}" ;;
 *'--method POST repos/3leaps/storageprims/releases '*)
 	[[ "$*" == *'-F draft=true'* && "$*" == *'-F prerelease=false'* && "$*" == *"target_commitish=$FIXTURE_COMMIT"* ]] || exit 1
 	printf 'create\n' >>"$MOCK_CALLS"
@@ -94,8 +96,12 @@ refused 'staged artifact record is absent' 'guard' run
 record 0000000000000000000000000000000000000000
 refused 'fetched for another tag object' 'guard' run
 record "$object"
+mkdir "$repo/dist/release.draft"
+refused 'draft record is not a regular file' $'guard\nperms' run
+rmdir "$repo/dist/release.draft"
 refused 'the GitHub identity cannot see drafts' $'guard\nperms' env MOCK_PUSH=false bash -c "$(declare -f run); run"
 refused 'a release or draft for this tag already exists' $'guard\nperms\nlist' env MOCK_LIST=draft bash -c "$(declare -f run); run"
+refused 'untagged draft targets its commit' $'guard\nperms\nlist' env MOCK_LIST=orphan bash -c "$(declare -f run); run"
 refused 'the release list could not be read' $'guard\nperms\nlist' env MOCK_LIST=fail bash -c "$(declare -f run); run"
 refused 'create-only draft request failed' $'guard\nperms\nlist\ncreate' env MOCK_CREATE=conflict bash -c "$(declare -f run); run"
 refused 'draft may be partial' $'guard\nperms\nlist\ncreate\nupload' env MOCK_UPLOAD=fail bash -c "$(declare -f run); run"

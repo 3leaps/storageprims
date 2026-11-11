@@ -63,10 +63,17 @@ fi
 	echo "error: signed-set mutations must address the verified release id" >&2
 	exit 1
 }
-if rg -n --glob '!release-negative-controls.test.sh' \
+if rg -n --glob '!release-negative-controls.test.sh' --glob '!release-publish.sh' --glob '!*.test.sh' \
 	-- '--draft=false|draft:[[:space:]]*false' \
 	scripts .github/workflows/release.yml >/dev/null; then
-	echo "error: release tooling must not auto-publish" >&2
+	echo "error: publication must remain exclusive to release-publish.sh" >&2
+	exit 1
+fi
+
+# Neither signing entry point may invoke the separate publication target.
+if sed -n '/^release:/,/^release-resume:/p; /^release-resume:/,$p' Makefile |
+	rg 'release-publish' >/dev/null; then
+	echo 'error: signing and resume targets must leave the release as draft' >&2
 	exit 1
 fi
 

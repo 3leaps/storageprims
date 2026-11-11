@@ -275,6 +275,15 @@ Recovery after a stop. Never rerun `make release` once a draft exists:
   the run's artifacts are retained (30 days). A rerun of the workflow produces
   different archive bytes; `release-verify-draft` then refuses, and the draft
   must be deleted and the ceremony restarted.
+- Stopped after the complete signed upload but before final verification:
+  preserve the signed local directory and `dist/release.draft`. Do not use
+  `release-resume`, which expects the unsigned base inventory. Inspect the
+  recorded release ID, target commit and asset inventory. If an older uploader
+  detached the draft to `untagged-*`, a separate maintainer-approved repair
+  must PATCH that recorded ID with `tag_name=<exact tag>` and `draft=true`.
+  Then run `make release-verify` and
+  `./scripts/release-verify-draft.sh dist/release signed`; both must pass.
+  Never select a replacement release merely because it shares the target commit.
 - Stopped inside `release-draft` (partial asset upload) or inside
   `release-upload` (some signed assets uploaded): the draft inventory no longer
   matches and `release-resume` refuses. Inspect the draft, delete it as a
@@ -290,7 +299,14 @@ edit, or delete the draft by any other means while the ceremony runs.
 - [ ] Independently download into an empty directory and verify both checksum
       manifests and minisign signatures
 - [ ] Review the final release notes and asset list
-- [ ] Publish the GitHub release only as a separate, explicit maintainer action
+- [ ] Publish the GitHub release only as a separate, explicit maintainer action:
+      `make release-publish`. Publication is irreversible under immutable releases.
+      The target verifies the signed local set and recorded draft byte for byte,
+      rechecks the remote annotated tag, publishes that ID with the exact tag
+      binding, and checks the immutable release identity and complete inventory.
+      If publication or its readback fails, inspect remote state before retrying.
+- [ ] Publish the GitHub release before publishing crates; freeze merges to
+      `main` until registry publication and verification are complete
 
 ## crates.io (manual maintainer action after the tag)
 
