@@ -22,7 +22,7 @@
 .PHONY: release-clean release-verify-draft release-resume release-notes release-checksums release-sign
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
 .PHONY: release-verify-keys release-verify release-upload release
-.PHONY: release-crates-list release-crates-dry-run release-crates-verify
+.PHONY: license-sync release-crates-list release-crates-dry-run release-crates-verify
 .PHONY: release-prepare-tag-message release-tag release-push-tag release-verify-tag release-verify-remote-tag release-insert-anchors
 .PHONY: release-export-pin release-validate-pin
 
@@ -547,9 +547,13 @@ version-check: ## Validate version consistency across files
 # -----------------------------------------------------------------------------
 
 release-check: version-check ## Version consistency + package check (does not publish)
+	@./scripts/crate-licenses.py check
 	@echo "Packaging workspace crates (does not cargo publish)..."
 	@./scripts/check-packages.sh
 	@echo "[ok] Package check passed; cargo publish was not run"
+
+license-sync: ## Copy the root license texts into every publishable crate
+	@./scripts/crate-licenses.py sync
 
 release-crates-list: ## Print the validated registry publication order
 	@./scripts/release-crates.py list
@@ -576,6 +580,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-prepare-tag-message.test.sh
 	@./scripts/verify-pinned-tag.test.sh
 	@./scripts/release-crates.test.sh
+	@./scripts/crate-licenses.test.sh
 	@./scripts/release-crates-verify.test.sh
 	@./scripts/release-guard-tag-version.test.sh
 	@./scripts/release-assets.test.sh

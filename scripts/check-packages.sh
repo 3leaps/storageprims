@@ -74,6 +74,7 @@ check_dependencies(manifest)
 for target in manifest.get("target", {}).values():
     check_dependencies(target)
 PY
+	"$SCRIPT_DIR/crate-licenses.py" archive "$archive"
 done
 
 printf '[ok] Verified package archives: %s\n' "${expected[*]}"

@@ -50,6 +50,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   provider, testing with the local provider, and location-independent code,
   with runnable `local_roundtrip` and `portable_store` examples.
 - `storageprims-local` requires `rustix` 1.1.6 or newer (RUSTSEC-2026-0486).
+- Each published crate now includes the `LICENSE-MIT` and `LICENSE-APACHE`
+  texts. `make release-check` refuses packages whose copies are missing or
+  differ from the repository root, and `make license-sync` refreshes them.
 
 ## [0.1.2] - 2026-09-28
 
