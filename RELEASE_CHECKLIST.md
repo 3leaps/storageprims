@@ -338,102 +338,55 @@ verification. Keep `main` fixed throughout the ceremony.
 The Make dry-run rehearsal uses local path patches for **all earlier entries**
 in the publication list, whether or not they are already on the registry. It
 does not upload anything or prove unpatched registry dependency resolution.
-The per-crate dry runs below test that resolution after predecessors are
-indexed. Cargo may print `Uploading` followed by `aborting upload due to dry
+For a separate per-crate dry run, wait until its predecessors are indexed.
+Cargo may print `Uploading` followed by `aborting upload due to dry
 run`; that warning is expected, not an actual upload. Optionally confirm that
 `cargo publish --dry-run -p storageprims-ffi` fails as unpublished (and do
 the same for a future `storageprims-cli`).
 
-For registry publication, use a crates.io token scoped to the publishable
-names. Keep it in an external secret store, never in the repository or CI.
-First uploads require `publish-new` and `publish-update`; subsequent updates
-require only `publish-update`. Set an expiry of 30–90 days. Do not
-grant `yank` without a separate decision. Immediately before the first upload
-of each new name, confirm it is unclaimed with
-`cargo info --registry crates-io <crate>`. Load the token into the environment
-only for the specific publish command. Do not use `cargo login`, which persists
-plaintext in Cargo credentials.
+For registry publication, use a crates.io token whose name scope includes every
+crate from `make release-crates-list`. Store the token in an external regular
+file and set `STORAGEPRIMS_CARGO_TOKEN_FILE` to its absolute path. Both
+`CARGO_REGISTRY_TOKEN` and `CARGO_REGISTRIES_CRATES_IO_TOKEN` must be unset,
+even if empty. Do not use `cargo login` or place credentials in the repository
+or CI. Use a short-lived `publish-new` token for first uploads and revoke it
+afterwards; subsequent updates need only `publish-update`.
 
-An explicit crate-not-found response establishes that a name is unclaimed;
-network, authentication, rate-limit, or server failures do not. If a name
-exists, check ownership and whether the intended version already exists before
-publishing. Never retry an already successful publication.
+Publish the immutable GitHub release first, and keep merges to `main` frozen
+until all crates have been verified. Work from a clean detached checkout of
+the signed tag with its pinned Rust toolchain installed.
 
-A crate's first upload needs a token allowed to publish new crates; in the
-v0.2.0 cut that is `storageprims-local`. An updates-only token used for a first
-upload can produce:
+### Publish one crate at a time
 
-```text
-error: failed to publish storageprims-local v0.2.0
-the remote server responded with an error (status 403 Forbidden):
-this token does not have the required permissions to perform this action
-```
-
-This illustrates a permission failure, not a diagnosis unique to missing
-`publish-new`. Check token scopes, name restrictions, ownership, and expiry;
-inspect registry state before retrying. Do not include token values in receipts.
-
-### Publish one crate at a time — confirm the actual list output
-
-The literal examples below match the current `make release-crates-list` order:
-**core → s3 → local → ops**, including the ops development dependencies on s3
-and local. Confirm
-that output before following the examples. The maintainer runs each approved
-publication with the scoped token loaded only for that command. Stop on any
-failure or intervening hold; do not paste the entire sequence as a batch.
-
-For core:
+After the maintainer's explicit publication cue:
 
 ```bash
-STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
-make release-verify-remote-tag
-cargo publish --dry-run --locked -p storageprims-core
-cargo publish --locked -p storageprims-core
-make release-crates-verify CRATE=storageprims-core
-```
-
-Only after core verification succeeds, run s3:
-
-```bash
-STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
-make release-verify-remote-tag
-cargo publish --dry-run --locked -p storageprims-s3
-cargo publish --locked -p storageprims-s3
-make release-crates-verify CRATE=storageprims-s3
-```
-
-Only after s3 verification succeeds, run local. This is the first upload of
-`storageprims-local`: confirm the name is unclaimed immediately before
-publishing, and use a token that allows new crates.
-
-```bash
-STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
-make release-verify-remote-tag
-cargo info --registry crates-io storageprims-local
-cargo publish --dry-run --locked -p storageprims-local
-cargo publish --locked -p storageprims-local
-make release-crates-verify CRATE=storageprims-local
-```
-
-Only after local verification succeeds, run ops and the final all-list check:
-
-```bash
-STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
-make release-verify-remote-tag
-cargo publish --dry-run --locked -p storageprims-ops
-cargo publish --locked -p storageprims-ops
-make release-crates-verify CRATE=storageprims-ops
+make release-crates-list
+make release-crates-publish
 make release-crates-verify
 ```
 
-The unpatched dependent dry runs must wait for their predecessors to reach the
-index. Keep `--locked` and normal package/build verification; do not edit the
-lockfile or use `--no-verify`/`--allow-dirty` to bypass a failure. Repeat the
-strict/remote checks immediately before upload if the command sequence was
-interrupted.
+The publisher exports the exact tagged blobs into a fresh tree and packages
+each crate without compiling. Required build and dry-run checks must already
+have passed before this publication step. It presents the crate, version and
+archive SHA-256, then requires the maintainer to type the exact crate name at
+a terminal. The Cargo credential provider releases the token only for that
+registry, name, version and archive digest. Cargo source and command overrides
+are refused; approval does not authorize a different archive.
 
-Each Make verification waits for the exact registry version and checks the
-crates.io API for the exact name/version and `yanked=false`. To inspect the
+Each successful upload waits for the sparse index and checks the downloaded
+archive before proceeding to the next crate. A rerun skips a published version
+only when its checksum equals the package from the tagged source; a mismatch,
+yanked version or unreadable registry stops the run. Never re-upload a version
+to recover from a verification failure.
+
+The final `release-crates-verify` checks each downloaded archive against the
+crates.io API checksum, both license texts and the tagged commit recorded in
+`.cargo_vcs_info.json`, then checks docs.rs for that exact version. A pending
+docs.rs build fails verification; rerun the read-only verification target after
+the build completes. `CRATE=<name>` selects one listed crate for verification.
+
+To inspect the
 **0.2.0 example cut** manually, use the following. For future cuts, use the
 version in `VERSION` that matches the selected release tag:
 
