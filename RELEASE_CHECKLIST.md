@@ -33,7 +33,7 @@ Required ceremony variables:
 - `STORAGEPRIMS_TAG_MESSAGE_DIR` — external per-cut directory ending in the
   canonical tag; `make release-prepare-tag-message` creates the directory and
   complete `message.txt` when absent. This is the approved public tag
-  annotation (for example, `storageprims v0.1.2` and one final newline), not
+  annotation (for example, `storageprims v0.2.0` and one final newline), not
   a fill-in template or release-notes copy. It must be nonempty UTF-8, regular
   and non-symlink, with no CR/NUL, trailing whitespace
   or extra final blank line. Do not include policy digests or signing material.
@@ -81,7 +81,7 @@ subsequent maintainer ceremony. Partial configuration fails closed.
       below). Prepare and review the public message:
 
   ```console
-  $ STORAGEPRIMS_RELEASE_TAG=v0.1.2 make release-prepare-tag-message
+  $ STORAGEPRIMS_RELEASE_TAG=v0.2.0 make release-prepare-tag-message
   ```
 
   This target needs no signing keys, GitHub access, or MFA. It creates a
@@ -192,9 +192,9 @@ prepare target previews only the finished public message. Run each tag command
 only after its own explicit cue:
 
 ```console
-$ STORAGEPRIMS_RELEASE_TAG=v0.1.2 make release-tag
+$ STORAGEPRIMS_RELEASE_TAG=v0.2.0 make release-tag
 # Stop; review the locally verified tag object before a separate remote-push cue.
-$ STORAGEPRIMS_RELEASE_TAG=v0.1.2 make release-push-tag
+$ STORAGEPRIMS_RELEASE_TAG=v0.2.0 make release-push-tag
 ```
 
 The optional loader pointer is not required when the ceremony variables are
@@ -312,12 +312,12 @@ checkout. Note the starting branch (`git branch --show-current`) so you can
 return after **all** release work is complete. Do not discard changes to make
 the checkout clean.
 
-The tag and exact-version examples in this section are for the **v0.1.2 cut**.
+The tag and exact-version examples in this section are for the **v0.2.0 cut**.
 For a future cut, match the selected tag to `v$(cat VERSION)` and use that
 version in the registry queries; do not copy a previous cut's tag or version.
 
 ```bash
-export STORAGEPRIMS_RELEASE_TAG=v0.1.2
+export STORAGEPRIMS_RELEASE_TAG=v0.2.0
 test -z "$(git status --porcelain)" # stop if this fails
 git fetch origin \
   "+refs/heads/main:refs/remotes/origin/main" \
@@ -359,10 +359,12 @@ network, authentication, rate-limit, or server failures do not. If a name
 exists, check ownership and whether the intended version already exists before
 publishing. Never retry an already successful publication.
 
-An updates-only token used for a first upload can produce:
+A crate's first upload needs a token allowed to publish new crates; in the
+v0.2.0 cut that is `storageprims-local`. An updates-only token used for a first
+upload can produce:
 
 ```text
-error: failed to publish storageprims-core v0.1.2
+error: failed to publish storageprims-local v0.2.0
 the remote server responded with an error (status 403 Forbidden):
 this token does not have the required permissions to perform this action
 ```
@@ -374,7 +376,8 @@ inspect registry state before retrying. Do not include token values in receipts.
 ### Publish one crate at a time — confirm the actual list output
 
 The literal examples below match the current `make release-crates-list` order:
-**core → s3 → ops**, including the ops development dependency on s3. Confirm
+**core → s3 → local → ops**, including the ops development dependencies on s3
+and local. Confirm
 that output before following the examples. The maintainer runs each approved
 publication with the scoped token loaded only for that command. Stop on any
 failure or intervening hold; do not paste the entire sequence as a batch.
@@ -399,7 +402,20 @@ cargo publish --locked -p storageprims-s3
 make release-crates-verify CRATE=storageprims-s3
 ```
 
-Only after s3 verification succeeds, run ops and the final all-list check:
+Only after s3 verification succeeds, run local. This is the first upload of
+`storageprims-local`: confirm the name is unclaimed immediately before
+publishing, and use a token that allows new crates.
+
+```bash
+STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
+make release-verify-remote-tag
+cargo info --registry crates-io storageprims-local
+cargo publish --dry-run --locked -p storageprims-local
+cargo publish --locked -p storageprims-local
+make release-crates-verify CRATE=storageprims-local
+```
+
+Only after local verification succeeds, run ops and the final all-list check:
 
 ```bash
 STORAGEPRIMS_REQUIRE_TAG=1 make release-guard-tag-version
@@ -418,13 +434,14 @@ interrupted.
 
 Each Make verification waits for the exact registry version and checks the
 crates.io API for the exact name/version and `yanked=false`. To inspect the
-**0.1.2 example cut** manually, use the following. For future cuts, use the
+**0.2.0 example cut** manually, use the following. For future cuts, use the
 version in `VERSION` that matches the selected release tag:
 
 ```bash
-cargo info --registry crates-io storageprims-core@0.1.2
-cargo info --registry crates-io storageprims-s3@0.1.2
-cargo info --registry crates-io storageprims-ops@0.1.2
+cargo info --registry crates-io storageprims-core@0.2.0
+cargo info --registry crates-io storageprims-s3@0.2.0
+cargo info --registry crates-io storageprims-local@0.2.0
+cargo info --registry crates-io storageprims-ops@0.2.0
 ```
 
 With no `@version`, an explicit registry query shows the latest version, not

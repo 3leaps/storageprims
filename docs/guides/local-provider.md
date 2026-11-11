@@ -5,16 +5,18 @@ same `StorageProvider` contract as the S3 provider. Use it to keep data on
 local disk, to stage files before they go to a bucket, or to test storage code
 without a network (see [Testing with the local provider](testing-with-the-local-provider.md)).
 
-`storageprims-local` is not in a tagged release yet; it is planned for
-storageprims 0.2.0. Until then, depend on the repository (this tracks `main`; add `rev = "<commit>"` to
-pin one):
+`storageprims-local` is available from storageprims 0.2.0:
 
 ```toml
 [dependencies]
-storageprims-core = { git = "https://github.com/3leaps/storageprims" }
-storageprims-local = { git = "https://github.com/3leaps/storageprims" }
+storageprims-core = "0.2"
+storageprims-local = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
+
+To build from the signed tag instead, use
+`{ git = "https://github.com/3leaps/storageprims", tag = "v0.2.0" }` for each
+crate.
 
 Tests that use `#[tokio::test]` need `tokio` with
 `macros` and `rt` (or `rt-multi-thread`) as a dev-dependency.
@@ -107,9 +109,11 @@ path.
   no Unicode normalization or case folding.
 - `max_keys` of `None` or `0` means 1000; values above 1000 are refused.
 - Each `list` or `list_delimited` call may examine at most 100,000 directory
-  entries and run for at most 10 seconds. A request that would exceed either
-  limit fails with `StorageError::Inspection` rather than returning a partial
-  page. Every entry in each directory the walk opens counts, including entries
+  entries and is checked against a 10-second deadline between filesystem
+  steps. A request that exceeds either limit fails with
+  `StorageError::Inspection` rather than returning a partial page. A stalled
+  filesystem call cannot be interrupted, so a request can take longer than 10
+  seconds before it fails. Every entry in each directory the walk opens counts, including entries
   that do not match the prefix, so a single directory with more than 100,000
   entries cannot be listed even with a narrow prefix. Spread keys across
   `/`-separated segments to keep each directory well below that.
