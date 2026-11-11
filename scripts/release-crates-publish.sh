@@ -118,7 +118,7 @@ if [[ "$publish" == 1 && "$index_url" == "$crates_io_index" ]]; then
 	"$root/scripts/release-github-preflight.sh"
 	STORAGEPRIMS_REQUIRE_TAG=1 "$root/scripts/release-guard-tag-version.sh" >/dev/null
 	"$root/scripts/release-verify-remote-tag.sh"
-	gh api "repos/3leaps/storageprims/releases/tags/$STORAGEPRIMS_RELEASE_TAG" |
+	gh api --hostname github.com "repos/3leaps/storageprims/releases/tags/$STORAGEPRIMS_RELEASE_TAG" |
 		"$python_bin" -I -c 'import json,sys; r=json.load(sys.stdin); assert r["tag_name"]==sys.argv[1] and r["target_commitish"]==sys.argv[2] and r["draft"] is False and r["immutable"] is True' "$STORAGEPRIMS_RELEASE_TAG" "$commit" ||
 		die 'publish the immutable GitHub release before publishing crates'
 fi
@@ -199,10 +199,6 @@ local_checksum() {
 		CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
 		RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
 		${msrv:+RUSTUP_TOOLCHAIN="$msrv"} \
-		${FAKE_CRATE:+FAKE_CRATE="$FAKE_CRATE"} \
-		${FAKE_VCS_SHA:+FAKE_VCS_SHA="$FAKE_VCS_SHA"} \
-		${FAKE_VCS_PATH:+FAKE_VCS_PATH="$FAKE_VCS_PATH"} \
-		${CARGO_CALLS:+CARGO_CALLS="$CARGO_CALLS"} \
 		cargo package --locked --no-verify -p "$crate" >/dev/null 2>&1) || die "cannot package $crate"
 	[[ -f "$file" ]] || die "packaged crate $file not found"
 	path="$("$python_bin" -I "$tree/scripts/release-crates.py" paths | awk -v c="$crate" '$1==c {print $2}')"

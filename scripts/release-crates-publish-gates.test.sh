@@ -21,6 +21,7 @@ done
 chmod +x "$repo/scripts/"*
 cat >"$scratch/bin/gh" <<'STUB'
 #!/usr/bin/env bash
+[[ "$1 $2 $3" == 'api --hostname github.com' ]] || { echo 'error: unpinned GitHub host' >&2; exit 1; }
 echo github-release >>"$MOCK_CALLS"
 printf '{"tag_name":"v1.2.3","target_commitish":"%s","draft":false,"immutable":false}\n' "$FIXTURE_COMMIT"
 STUB
@@ -76,4 +77,28 @@ for gate in release-github-preflight release-guard-tag-version release-verify-re
 		exit 1
 	}
 done
+
+# Exercise the real remote-tag helper against a local Git remote. The simulated
+# default gh host is untrusted: only an explicit github.com request succeeds.
+cp "$root/scripts/release-verify-remote-tag.sh" "$repo/scripts/"
+cat >"$repo/scripts/release-tag-common.sh" <<'STUB'
+tag_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tag_die() { echo "error: $*" >&2; exit 1; }
+STUB
+printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/scripts/release-verify-tag.sh"
+chmod +x "$repo/scripts/release-verify-tag.sh"
+git clone --bare -q "$repo" "$scratch/origin.git"
+git -C "$repo" remote add origin "$scratch/origin.git"
+FIXTURE_TAG_OBJECT="$(git -C "$repo" rev-parse refs/tags/v1.2.3)"
+export FIXTURE_TAG_OBJECT
+cat >"$scratch/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1 $2 $3" == 'api --hostname github.com' ]] || { echo 'error: unpinned GitHub host' >&2; exit 1; }
+case "$4" in
+*/git/ref/tags/v1.2.3) printf '{"object":{"type":"tag","sha":"%s"}}\n' "$FIXTURE_TAG_OBJECT" ;;
+*/git/tags/*) printf '{"tag":"v1.2.3","object":{"type":"commit","sha":"%s"},"verification":{"verified":true,"reason":"valid"}}\n' "$FIXTURE_COMMIT" ;;
+*) exit 1 ;;
+esac
+STUB
+bash "$repo/scripts/release-verify-remote-tag.sh"
 echo '[ok] crates publication: production authority failures stop before registry or packaging'
