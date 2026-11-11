@@ -281,12 +281,29 @@ touch "$fixture_dir/dirty-during-publish"
 expect_fail_with 'packaging changed the release source' publish_tty storageprims-core
 rm -f "$fixture_dir/dirty-during-publish"
 
+# Inherited Python startup hooks must never execute in the production helper
+# chain, either before refused approval or through an approved publication.
+mkdir -p "$fixture_dir/python-startup"
+cat >"$fixture_dir/python-startup/sitecustomize.py" <<'PYHOOK'
+import os
+from pathlib import Path
+Path(os.environ["STORAGEPRIMS_TEST_HOOK_MARKER"]).write_text(
+    Path(os.environ["STORAGEPRIMS_CARGO_TOKEN_FILE"]).read_text()
+)
+PYHOOK
+expect_fail_with 'not confirmed' publish_tty wrong-crate \
+	PYTHONPATH="$fixture_dir/python-startup" STORAGEPRIMS_TEST_HOOK_MARKER="$fixture_dir/python-hook-ran"
+[[ ! -e "$fixture_dir/python-hook-ran" ]]
+[[ "$(puts)" == 0 ]]
+
 # 3. Real publication through the release provider.
 export STORAGEPRIMS_CARGO_PROVIDER_LOG="$fixture_dir/provider.log"
-publish_tty storageprims-core >"$fixture_dir/out" 2>&1 || {
+publish_tty storageprims-core PYTHONPATH="$fixture_dir/python-startup" \
+	STORAGEPRIMS_TEST_HOOK_MARKER="$fixture_dir/python-hook-ran" >"$fixture_dir/out" 2>&1 || {
 	cat "$fixture_dir/out" >&2
 	exit 1
 }
+[[ ! -e "$fixture_dir/python-hook-ran" ]]
 grep -q "storageprims-core $version published and verified ($digest)" "$fixture_dir/out"
 [[ "$(puts)" -ge 1 ]]
 python3 - "$fixture_dir/provider.log" "$digest" <<'PY'

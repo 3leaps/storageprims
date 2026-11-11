@@ -208,7 +208,7 @@ def attach_commit(repo, commit, root):
         source.write(gitfile_bytes(git_dir))
     helper = pathlib.Path(__file__).resolve().parent / "write-exclusive.py"
     created = subprocess.run(
-        [sys.executable, str(helper), source.name, str(root / ".git")],
+        [sys.executable, "-I", str(helper), source.name, str(root / ".git")],
         capture_output=True,
         check=False,
     )

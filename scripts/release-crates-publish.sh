@@ -9,6 +9,11 @@
 # Test-only: --registry-index URL --registry-api URL --registry-dl URL select a
 # local test registry; a release run never passes them.
 set -euo pipefail
+# Python-based authority gates also run before packaging. Remove interpreter
+# startup/module overrides before entering any helper or its subprocesses.
+for name in $(compgen -e); do
+	[[ "$name" != PYTHON* ]] || unset "$name"
+done
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$root"
 die() {
@@ -114,7 +119,7 @@ if [[ "$publish" == 1 && "$index_url" == "$crates_io_index" ]]; then
 	STORAGEPRIMS_REQUIRE_TAG=1 "$root/scripts/release-guard-tag-version.sh" >/dev/null
 	"$root/scripts/release-verify-remote-tag.sh"
 	gh api "repos/3leaps/storageprims/releases/tags/$STORAGEPRIMS_RELEASE_TAG" |
-		python3 -I -c 'import json,sys; r=json.load(sys.stdin); assert r["tag_name"]==sys.argv[1] and r["target_commitish"]==sys.argv[2] and r["draft"] is False and r["immutable"] is True' "$STORAGEPRIMS_RELEASE_TAG" "$commit" ||
+		"$python_bin" -I -c 'import json,sys; r=json.load(sys.stdin); assert r["tag_name"]==sys.argv[1] and r["target_commitish"]==sys.argv[2] and r["draft"] is False and r["immutable"] is True' "$STORAGEPRIMS_RELEASE_TAG" "$commit" ||
 		die 'publish the immutable GitHub release before publishing crates'
 fi
 
@@ -131,7 +136,7 @@ unset CARGO_BUILD_TARGET_DIR CARGO_TARGET_DIR
 if [[ -f "$root/scripts/check-registry-config.py" ]]; then
 	CARGO_HOME="${CARGO_HOME:-$scratch/op-cargo-home}" "$python_bin" -I "$root/scripts/check-registry-config.py" >/dev/null
 fi
-python3 "$root/scripts/release-export-tree.py" "$root" "$commit" "$tree" ||
+"$python_bin" -I "$root/scripts/release-export-tree.py" "$root" "$commit" "$tree" ||
 	die 'cannot export the tagged commit with its exact bytes'
 if [[ -f "$root/scripts/check-registry-config.py" ]]; then
 	CARGO_HOME="${CARGO_HOME:-$scratch/op-cargo-home}" "$python_bin" -I "$root/scripts/check-registry-config.py" --source-root "$tree" >/dev/null
@@ -149,7 +154,7 @@ gitdir="$(sed -n '1s/^gitdir: //p' .git)"
 	die 'the export gitfile does not name this run'"'"'s git directory'
 [[ "$(git rev-parse --absolute-git-dir)" == "$gitdir" && "$(git rev-parse HEAD)" == "$commit" ]] ||
 	die 'the export does not resolve to the tagged commit in its own git directory'
-python3 "$tree/scripts/release-crates.py" check
+"$python_bin" -I "$tree/scripts/release-crates.py" check
 
 registry_args=()
 index_args=()
@@ -200,14 +205,14 @@ local_checksum() {
 		${CARGO_CALLS:+CARGO_CALLS="$CARGO_CALLS"} \
 		cargo package --locked --no-verify -p "$crate" >/dev/null 2>&1) || die "cannot package $crate"
 	[[ -f "$file" ]] || die "packaged crate $file not found"
-	path="$(python3 "$tree/scripts/release-crates.py" paths | awk -v c="$crate" '$1==c {print $2}')"
-	python3 "$tree/scripts/release-crates.py" vcs-info "$file" "$crate" "$version" "$commit" "$path" ||
+	path="$("$python_bin" -I "$tree/scripts/release-crates.py" paths | awk -v c="$crate" '$1==c {print $2}')"
+	"$python_bin" -I "$tree/scripts/release-crates.py" vcs-info "$file" "$crate" "$version" "$commit" "$path" ||
 		die "$crate does not record the tagged commit and its path"
-	python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$file"
+	"$python_bin" -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$file"
 }
 
 # Collect the ordered plan whole and check the producer before iterating.
-plan_output="$(python3 "$tree/scripts/release-crates.py" paths)" || die 'cannot read the crate publication plan'
+plan_output="$("$python_bin" -I "$tree/scripts/release-crates.py" paths)" || die 'cannot read the crate publication plan'
 crates=()
 paths=()
 while read -r crate path; do

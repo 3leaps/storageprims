@@ -10,7 +10,7 @@ cp "$root/scripts/"{release-crates-verify.sh,release-crates-registry.sh,release-
 # The auditor imports the real provenance helper, but plan checks are stubbed.
 cp "$root/scripts/release-crates.py" "$repo/scripts/provenance.py"
 sed 's@ROOT / "scripts/release-crates.py"@ROOT / "scripts/provenance.py"@' "$root/scripts/release-crates-audit.py" >"$repo/scripts/release-crates-audit.py"
-printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/scripts/release-crates.py"
+printf '#!/usr/bin/env python3\nraise SystemExit(0)\n' >"$repo/scripts/release-crates.py"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/scripts/release-guard-tag-version.sh"
 chmod +x "$repo/scripts/"*.sh "$repo/scripts/release-crates.py"
 printf '1.2.3\n' >"$repo/VERSION"
