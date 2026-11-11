@@ -11,6 +11,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
+- Breaking: `StorageError`, `Capability`, and `InspectionLimitDimension` are
+  now `#[non_exhaustive]`; exhaustive matches in downstream crates need a
+  wildcard arm. `InspectionLimitDimension` gains `Entries`.
+- Add advisory `DelimiterListingProvider::supports_delimiter`; it defaults to
+  `false`, so external implementations should override it to report the
+  delimiters they accept.
 - Add `storageprims-local`, a rooted local filesystem provider with
   handle-relative no-follow containment, atomic overwrite and create-only
   conditional writes, bounded lexical flat and `"/"` delimiter listing, and
@@ -33,6 +41,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   run, creates the draft release, and uploads signatures to that draft after
   checking its assets byte for byte. Release public keys are copied from the
   tagged commit, and `docs/security/` documents the verification pins.
+- Add `make release-github-preflight`, run by `make release-preflight`, which
+  stops unless the default `GITHUB_TOKEN` is read-only, Actions cannot approve
+  pull requests, the tag ruleset protects `refs/tags/v*`, and immutable
+  releases are enabled.
+- Add guides under `docs/guides/` for how the crates fit together, the local
+  provider, testing with the local provider, and location-independent code,
+  with runnable `local_roundtrip` and `portable_store` examples.
 
 ## [0.1.2] - 2026-09-28
 
@@ -77,7 +92,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Add unsigned native FFI release artifacts and a local MFA signing and
   verification workflow
 
-[Unreleased]: https://github.com/3leaps/storageprims/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/3leaps/storageprims/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/3leaps/storageprims/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/3leaps/storageprims/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/3leaps/storageprims/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/3leaps/storageprims/releases/tag/v0.1.0
