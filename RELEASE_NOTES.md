@@ -57,7 +57,7 @@
   verified. Release verification instructions are in
   `docs/security/README.md`.
 
-Full notes: [docs/releases/v0.2.1.md](docs/releases/v0.2.1.md)
+Full notes: [docs/releases/v0.2.1.md](https://github.com/3leaps/storageprims/blob/v0.2.1/docs/releases/v0.2.1.md)
 
 ---
 
