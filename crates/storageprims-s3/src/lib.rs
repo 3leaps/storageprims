@@ -253,6 +253,14 @@ impl S3Provider {
                 reason: "copy target URI is missing a bucket".to_string(),
             })?;
 
+            if uri.path.trim_start_matches('/').is_empty() {
+                return Err(StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::Copy),
+                    argument: field.to_string(),
+                    reason: "object key must not be empty".to_string(),
+                });
+            }
+
             return Ok(S3Location {
                 bucket,
                 key: uri.path,
@@ -3492,6 +3500,60 @@ mod tests {
                 key: "path/to/file.txt".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn copy_rejects_empty_absolute_keys_before_transport() {
+        for root_prefix in [None, Some("root".to_string())] {
+            for bucket in ["sample-bucket", "other-bucket"] {
+                for suffix in ["", "/", "//", "////"] {
+                    for field in ["source", "destination"] {
+                        let capture = SigningCapture::default();
+                        let mut provider = signing_provider("sample-bucket", &capture).await;
+                        provider.root_prefix = root_prefix.clone();
+                        let invalid = format!("s3://{bucket}{suffix}");
+                        let (source, destination) = if field == "source" {
+                            (invalid.clone(), "valid-key".to_string())
+                        } else {
+                            ("valid-key".to_string(), invalid.clone())
+                        };
+                        let error = provider
+                            .copy(CopyRequest {
+                                source,
+                                destination,
+                            })
+                            .await
+                            .expect_err("empty absolute copy key must fail");
+                        assert!(
+                            matches!(error, StorageError::InvalidArgument {
+                            operation: Some(StorageOperation::Copy), argument, ..
+                        } if argument == field),
+                            "wrong error for {field} {invalid}"
+                        );
+                        assert!(
+                            capture.0.lock().unwrap().is_empty(),
+                            "invalid {field} reached transport: {invalid}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_absolute_keys_preserve_literal_bytes_and_ignore_root() {
+        let capture = SigningCapture::default();
+        let mut provider = signing_provider("sample-bucket", &capture).await;
+        provider.root_prefix = Some("root".to_string());
+        for key in ["file", "/file", "dir//file", "%2F", " ", "dir/"] {
+            for field in ["source", "destination"] {
+                let location = provider
+                    .resolve_copy_location(&format!("s3://other-bucket/{key}"), field)
+                    .unwrap();
+                assert_eq!(location.bucket, "other-bucket");
+                assert_eq!(location.key, key);
+            }
+        }
     }
 
     #[test]
