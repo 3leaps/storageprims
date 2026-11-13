@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove the per-cut file is exactly the matching RELEASE_NOTES section.
+# Prove the per-cut file matches its section, excluding trailing separator space.
 
 set -euo pipefail
 
@@ -19,7 +19,11 @@ trap 'rm -f "$extracted"' EXIT
 awk -v heading="## ${tag} " '
 	index($0, heading) == 1 { found = 1 }
 	found && /^---$/ { exit }
-	found { print }
+	found {
+		if ($0 == "") { pending++; next }
+		while (pending > 0) { print ""; pending-- }
+		print
+	}
 	END { if (!found) exit 1 }
 ' RELEASE_NOTES.md >"$extracted"
 
