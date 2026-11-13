@@ -19,14 +19,8 @@ feature-depth = 1
 [advisories]
 ignore = [
     # Upstream AWS SDK (pinned at aws-config 1.10.1 / aws-sdk-s3 1.142.0 for MSRV 1.94.1):
-    # - RUSTSEC-2026-0387: aws-sigv4 1.5.1 -> p256 0.13.2 depends on crypto-bigint 0.5.x
-    #   (patched in breaking 0.7.6; no semver-compatible upgrade available). Reachable only
-    #   when asymmetric SigV4A ECDSA P-256 request signing is used (standard regional and
-    #   S3-compatible requests sign with HMAC-SHA256 SigV4 and do not enter p256), and the
-    #   advisory concerns local timing/microarchitectural side channels during signing.
     # - RUSTSEC-2026-0441: aws-smithy-{types,http,runtime} depend on archived pin-utils 0.1.0.
     #   Informational repository-archival notice only (no known soundness or security defect).
-    "RUSTSEC-2026-0387",
     "RUSTSEC-2026-0441",
 ]
 
