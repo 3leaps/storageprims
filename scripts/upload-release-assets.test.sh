@@ -30,6 +30,9 @@ SH
 chmod +x "$repo/scripts/"*.sh
 cat >"$scratch/bin/gh" <<'SH'
 #!/usr/bin/env bash
+[[ "$1 $2 $3" == 'api --hostname github.com' ]] || { echo 'error: unpinned GitHub host' >&2; exit 1; }
+shift 3
+set -- api "$@"
 set -euo pipefail
 case "$*" in
 *'--method POST -H Content-Type: application/octet-stream https://uploads.github.com/repos/3leaps/storageprims/releases/55/assets?name='*)
@@ -46,7 +49,8 @@ case "$*" in
 	body="$(cat)"
 	jq -e '.draft == true and (.body | test("Fixture notes"))' <<<"$body" >/dev/null || exit 1
 	printf 'notes\n' >>"$MOCK_CALLS"
-	printf '{"id":55,"draft":%s}\n' "${MOCK_PATCH_DRAFT:-true}" ;;
+	tag="$(jq -r '.tag_name // "untagged-fixture"' <<<"$body")"
+ printf '{"id":55,"tag_name":"%s","draft":%s}\n' "${MOCK_PATCH_TAG:-$tag}" "${MOCK_PATCH_DRAFT:-true}" ;;
 *) printf 'unexpected gh call: %s\n' "$*" >&2; exit 1 ;;
 esac
 SH
@@ -98,5 +102,6 @@ refused 'verified draft id is unavailable' 'verify base ' MOCK_NO_RECORD=yes
 refused 'signed asset upload failed' $'verify base \nupload SHA256SUMS' MOCK_UPLOAD=fail
 refused 'signed asset upload response invalid' $'verify base \nupload SHA256SUMS' MOCK_UPLOAD=partial
 refused 'did not leave the verified draft' $'verify base \nupload SHA256SUMS\nupload SHA256SUMS.minisig\nnotes' MOCK_PATCH_DRAFT=false
+refused 'did not leave the verified draft' $'verify base \nupload SHA256SUMS\nupload SHA256SUMS.minisig\nnotes' MOCK_PATCH_TAG=untagged-fixture
 refused 'signed set differs' "$full" MOCK_VERIFY_SIGNED=bad
 echo '[ok] signed upload: base bytes verified first, signed additions and notes sent to the verified release id only, final signed-set verification bound to that id; refusals stop before or at the failing mutation'

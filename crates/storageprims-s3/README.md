@@ -6,6 +6,9 @@ See the [storageprims repository](https://github.com/3leaps/storageprims) for
 configuration and credential documentation, and the
 [guides](https://github.com/3leaps/storageprims/blob/main/docs/guides/README.md) for using S3 and local storage through one API.
 
+Regional AWS S3 and S3-compatible endpoints use SigV4 signing. Multi-Region
+Access Point ARNs are unsupported and are rejected before S3 request dispatch.
+
 The default provider probe performs `HeadBucket` against the configured
 bucket. Success establishes configured-bucket reachability only; it does not
 prove authorization for list, get, put, or other object operations.

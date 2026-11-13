@@ -24,6 +24,10 @@ original_path="$PATH"
 cat >"$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+case "$1 $2" in
+  'repo view') [[ "$3" == github.com/3leaps/storageprims ]] || exit 1 ;;
+  'release view') [[ "$4 $5" == '--repo github.com/3leaps/storageprims' ]] || exit 1 ;;
+esac
 case "${FAKE_RELEASE_STATE:?}" in
   wrong-repo)
     if [[ "$1 $2" == "repo view" ]]; then

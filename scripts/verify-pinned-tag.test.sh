@@ -53,6 +53,10 @@ verify() { (
 ); }
 verify >/dev/null
 STORAGEPRIMS_PGP_KEY_ID="$subkey!" verify >/dev/null
+for selector in "$subkey" "${subkey:1}!" "${subkey}0!" "G${subkey:1}!" \
+	"a${subkey:1}!" "${subkey}!!" " $subkey!" "$subkey! " "$primary!"; do
+	STORAGEPRIMS_PGP_KEY_ID="$selector" expect_fail verify
+done
 cp "$fixture/keys/expected-fingerprints.txt" "$scratch/anchors.good"
 printf 'gpg %s\nminisign %064d\n' "$primary" 1 >"$fixture/keys/expected-fingerprints.txt"
 expect_fail verify

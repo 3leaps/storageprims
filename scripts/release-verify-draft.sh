@@ -6,7 +6,7 @@
 # before signatures are uploaded and when resuming against an existing draft.
 # Mode `signed`: the complete signed set; used after upload. When
 # STORAGEPRIMS_EXPECTED_DRAFT_ID is set the draft must be that release. The
-# verified release id is recorded in dist/release.draft for later mutations.
+# creation record in dist/release.draft binds subsequent verification and mutations.
 
 set -euo pipefail
 
@@ -43,22 +43,39 @@ record="$root/dist/release.identity"
 "$(awk -F= '$1=="commit" {print $2}' "$record")" == "$commit" ]] ||
 	die 'staged artifacts were fetched for another tag object'
 
+draft_record="$root/dist/release.draft"
+if [[ -e "$draft_record" || -L "$draft_record" ]]; then
+	[[ -f "$draft_record" && ! -L "$draft_record" ]] || die 'invalid draft identity record'
+	recorded_id="$(sed -n 's/^id=//p' "$draft_record")"
+	[[ "$recorded_id" =~ ^[1-9][0-9]*$ ]] || die 'invalid recorded draft id'
+	[[ -z "$expected_id" || "$expected_id" == "$recorded_id" ]] || die 'expected id conflicts with recorded draft id'
+	expected_id="$recorded_id"
+else
+	die 'draft identity record is absent; recover the creation id before verification'
+fi
+
 # Drafts are listed only for a caller with push access.
-[[ "$(gh api "repos/$STORAGEPRIMS_REPOSITORY" --jq .permissions.push 2>/dev/null)" == true ]] ||
+[[ "$(gh api --hostname github.com "repos/$STORAGEPRIMS_REPOSITORY" --jq .permissions.push 2>/dev/null)" == true ]] ||
 	die 'the GitHub identity cannot see drafts'
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/storageprims-draft-verify.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
-gh api --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases?per_page=100" \
-	--jq ".[] | select(.tag_name == \"$tag\") | {id, draft, target_commitish}" >"$scratch/matches" ||
+gh api --hostname github.com --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases?per_page=100" \
+	--jq ".[] | select(.tag_name == \"$tag\") | {id, draft, target_commitish, prerelease, body}" >"$scratch/matches" ||
 	die 'the release list could not be read'
 [[ "$(jq -s length "$scratch/matches")" == 1 ]] || die 'expected exactly one release for the tag'
 jq -e --arg commit "$commit" '.draft == true and .target_commitish == $commit and (.id | type) == "number"' \
 	"$scratch/matches" >/dev/null || die 'the release for the tag is not a draft at the tag commit'
+jq -e '.prerelease == false' "$scratch/matches" >/dev/null || die 'draft must not be a prerelease'
+if [[ "$mode" == signed ]]; then
+	notes="$directory/release-notes-${tag}.md"
+	[[ -s "$notes" && ! -L "$notes" ]] || die 'signed release notes are absent'
+	jq -e --rawfile notes "$notes" '.body == $notes' "$scratch/matches" >/dev/null ||
+		die 'draft body differs from signed release notes'
+fi
 id="$(jq -r .id "$scratch/matches")"
 [[ -z "$expected_id" || "$id" == "$expected_id" ]] || die 'the draft for the tag is not the verified release'
-rm -f "$root/dist/release.draft"
 
-gh api --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases/$id/assets?per_page=100" \
+gh api --hostname github.com --paginate "repos/$STORAGEPRIMS_REPOSITORY/releases/$id/assets?per_page=100" \
 	--jq '.[] | "\(.id)\t\(.name)"' >"$scratch/assets" || die 'the draft asset list could not be read'
 cut -f2 "$scratch/assets" | LC_ALL=C sort >"$scratch/actual"
 "$expected_assets" | LC_ALL=C sort >"$scratch/expected"
@@ -69,7 +86,7 @@ cmp -s "$scratch/expected" "$scratch/actual" || {
 while IFS=$'\t' read -r asset_id name; do
 	[[ "$asset_id" =~ ^[1-9][0-9]*$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die 'unsafe draft asset entry'
 	[[ -f "$directory/$name" && ! -L "$directory/$name" ]] || die "staged $name is missing"
-	gh api -H 'Accept: application/octet-stream' \
+	gh api --hostname github.com -H 'Accept: application/octet-stream' \
 		"repos/$STORAGEPRIMS_REPOSITORY/releases/assets/$asset_id" >"$scratch/download" ||
 		die "draft asset $name could not be downloaded"
 	cmp -s "$scratch/download" "$directory/$name" ||

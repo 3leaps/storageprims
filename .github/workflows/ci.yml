@@ -176,6 +176,13 @@ jobs:
   publish-check:
     name: publish-check
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/fulmenhq/goneat-tools-runner-glibc@sha256:8c6324556e0e8c951b0ad2225f1cb87fad13445b6dcbc83717ace41c6959608e
+      options: --user 1001:1001
+    env:
+      HOME: /github/home
+      RUSTUP_HOME: /github/home/.rustup
+      CARGO_HOME: /github/home/.cargo
     defaults:
       run:
         shell: bash
@@ -188,27 +195,16 @@ jobs:
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772  # v1
         with:
           toolchain: 1.94.1
-      - name: Install ripgrep
-        env:
-          RG_VERSION: 15.1.0
-          RG_SHA256: 1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599
+      - name: Verify runner and release tooling dependencies
         run: |
-          rg_dir="ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl"
-          rg_tmp="$(mktemp -d "${RUNNER_TEMP}/ripgrep.XXXXXX")"
-          curl --disable --proto '=https' --tlsv1.2 -fsSL --retry 5 -o "$rg_tmp/rg.tgz" \
-            "https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/${rg_dir}.tar.gz"
-          echo "${RG_SHA256}  $rg_tmp/rg.tgz" | sha256sum -c -
-          tar -xzf "$rg_tmp/rg.tgz" -C "$rg_tmp" "${rg_dir}/rg"
-          sudo install -m 0755 "$rg_tmp/${rg_dir}/rg" /usr/local/bin/rg
-          rm -rf "$rg_tmp"
-          rg --version
-      - name: Verify release tooling dependencies
-        run: |
-          python3 -c 'import sys; assert sys.version_info >= (3, 11)'
-          command -v jq
-          command -v cargo
-          command -v rg
-          command -v yq
+          set -euo pipefail
+          test "$(id -u):$(id -g)" = "1001:1001"
+          rustc --version | grep '^rustc 1\.94\.1 '
+          rg --version | grep '^ripgrep 15\.1\.0 '
+          python3 -I -c 'import sys; assert sys.version_info >= (3, 11)'
+          for tool in jq cargo rg yq gpg gpg-agent make git curl minisign; do
+            command -v "$tool"
+          done
       - name: Install checksum-pinned Decernor for release tests
         run: |
           tool_dir="$(mktemp -d "$RUNNER_TEMP/decernor.XXXXXX")"
