@@ -21,8 +21,8 @@
 .PHONY: release-check release-preflight release-github-preflight release-tooling-test release-guard-tag-version release-fetch release-draft
 .PHONY: release-clean release-verify-draft release-resume release-notes release-checksums release-sign
 .PHONY: release-export-keys release-verify-checksums release-verify-signatures
-.PHONY: release-verify-keys release-verify release-upload release
-.PHONY: license-sync release-crates-list release-crates-dry-run release-crates-verify
+.PHONY: release-verify-keys release-verify release-upload release-publish release
+.PHONY: release-crates-publish license-sync release-crates-list release-crates-dry-run release-crates-verify
 .PHONY: release-prepare-tag-message release-tag release-push-tag release-verify-tag release-verify-remote-tag release-insert-anchors
 .PHONY: release-export-pin release-validate-pin
 
@@ -561,6 +561,9 @@ release-crates-list: ## Print the validated registry publication order
 release-crates-dry-run: ## Dry-run crates.io publishing from the guarded tag
 	@./scripts/release-crates-dry-run.sh
 
+release-crates-publish: ## Publish crates individually with digest-bound approval
+	@./scripts/release-crates-publish.sh --publish
+
 release-crates-verify: ## Wait for the final registry version and verify each published crate
 	@CRATE="$(CRATE)" ./scripts/release-crates-verify.sh
 
@@ -572,6 +575,7 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-create-draft.test.sh
 	@./scripts/release-fetch-ci-artifacts.test.sh
 	@./scripts/release-verify-draft.test.sh
+	@./scripts/release-publish.test.sh
 	@./scripts/upload-release-assets.test.sh
 	@./scripts/release-decernor.test.sh
 	@./scripts/release-pin-precursors.test.sh
@@ -582,6 +586,11 @@ release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
 	@./scripts/release-crates.test.sh
 	@./scripts/crate-licenses.test.sh
 	@./scripts/release-crates-verify.test.sh
+	@./scripts/release-crates-audit.test.sh
+	@./scripts/release-crates-publish-gates.test.sh
+	@./scripts/release-cargo-provider.test.sh
+	@./scripts/release-index-entry.test.sh
+	@./scripts/check-registry-config.test.sh
 	@./scripts/release-guard-tag-version.test.sh
 	@./scripts/release-assets.test.sh
 	@./scripts/release-github-state.test.sh
@@ -694,6 +703,9 @@ release-verify: release-verify-checksums release-verify-signatures release-verif
 
 release-upload: ## Verify once and update the exact trusted draft release
 	@./scripts/upload-release-assets.sh "$(RELEASE_DIR)"
+
+release-publish: ## Publish the verified signed draft (explicit maintainer action)
+	@./scripts/release-publish.sh "$(RELEASE_DIR)"
 
 release: release-guard-tag-version ## Run the serialized local signing ceremony
 	@STORAGEPRIMS_REQUIRE_TAG=1 ./scripts/release-guard-tag-version.sh >/dev/null

@@ -33,7 +33,7 @@ cp "$repo/dist/release/LICENSE-MIT" "$scratch/remote/101"
 cp "$repo/dist/release/storageprims-ffi-1.2.3-linux-amd64.tar.gz" "$scratch/remote/102"
 releases() {
 	printf '[{"id":9,"tag_name":"v1.2.2","draft":false,"target_commitish":"main"},'
-	printf '{"id":55,"tag_name":"v1.2.3","draft":%s,"target_commitish":"%s"}%s]\n' \
+	printf '{"id":55,"tag_name":"v1.2.3","prerelease":false,"body":"Fixture notes\\n","draft":%s,"target_commitish":"%s"}%s]\n' \
 		"${1:-true}" "${2:-$commit}" "${3:-}"
 }
 export -f releases
@@ -45,6 +45,9 @@ assets_json='[{"id":101,"name":"LICENSE-MIT"},{"id":102,"name":"storageprims-ffi
 export assets_json
 cat >"$scratch/bin/gh" <<'SH'
 #!/usr/bin/env bash
+[[ "$1 $2 $3" == 'api --hostname github.com' ]] || { echo 'error: unpinned GitHub host' >&2; exit 1; }
+shift 3
+set -- api "$@"
 set -euo pipefail
 args=("$@")
 jq_filter=''
@@ -84,6 +87,7 @@ refused() {
 	}
 }
 
+printf 'id=55\n' >"$repo/dist/release.draft"
 run || {
 	cat "$scratch/out" >&2
 	exit 1
@@ -105,16 +109,20 @@ refused 'differs from the verified local base set' bash -c run
 cp "$scratch/remote/102.keep" "$scratch/remote/102"
 # Bound to the verified release id; a different draft for the tag is refused,
 # and a refused run leaves no id record behind.
-refused 'not the verified release' env STORAGEPRIMS_EXPECTED_DRAFT_ID=56 bash -c run
-[[ ! -e "$repo/dist/release.draft" ]] || {
-	echo 'error: a refused verify left an id record' >&2
-	exit 1
-}
+refused 'expected id conflicts with recorded draft id' env STORAGEPRIMS_EXPECTED_DRAFT_ID=56 bash -c run
+grep -qx 'id=55' "$repo/dist/release.draft"
+printf 'id=56\n' >"$repo/dist/release.draft"
+refused 'not the verified release' bash -c run
+printf 'id=55\n' >"$repo/dist/release.draft"
 refused 'invalid expected draft id' env STORAGEPRIMS_EXPECTED_DRAFT_ID=abc bash -c run
 STORAGEPRIMS_EXPECTED_DRAFT_ID=55 bash -c run || {
 	cat "$scratch/out" >&2
 	exit 1
 }
+mv "$repo/dist/release.draft" "$scratch/draft.keep"
+refused 'draft identity record is absent' bash -c run
+mv "$scratch/draft.keep" "$repo/dist/release.draft"
+printf 'Fixture notes\n' >"$repo/dist/release/release-notes-v1.2.3.md"
 # Signed mode compares the complete signed set byte for byte.
 refused 'not exactly the signed set' bash -c 'cd "$repo" && bash scripts/release-verify-draft.sh dist/release signed >"$FIXTURE_OUT" 2>&1'
 printf 'sums\n' >"$repo/dist/release/SHA256SUMS"

@@ -172,12 +172,14 @@ impl S3Provider {
 
         let mut service_config = aws_sdk_s3::config::Builder::from(&sdk_config);
         service_config.set_force_path_style(config.target.force_path_style);
+        service_config.set_disable_multi_region_access_points(Some(true));
         let client = Client::from_conf(service_config.build());
 
         // Guarded reads fail closed rather than depending on SDK retry mutation
         // semantics for VersionId, If-Match, or Range headers.
         let mut guarded_service_config = aws_sdk_s3::config::Builder::from(&sdk_config);
         guarded_service_config.set_force_path_style(config.target.force_path_style);
+        guarded_service_config.set_disable_multi_region_access_points(Some(true));
         guarded_service_config.set_retry_config(Some(RetryConfig::standard().with_max_attempts(1)));
         let guarded_config = guarded_service_config.build();
 
@@ -250,6 +252,14 @@ impl S3Provider {
                 argument: field.to_string(),
                 reason: "copy target URI is missing a bucket".to_string(),
             })?;
+
+            if uri.path.trim_start_matches('/').is_empty() {
+                return Err(StorageError::InvalidArgument {
+                    operation: Some(StorageOperation::Copy),
+                    argument: field.to_string(),
+                    reason: "object key must not be empty".to_string(),
+                });
+            }
 
             return Ok(S3Location {
                 bucket,
@@ -3295,6 +3305,146 @@ mod tests {
         .expect("scripted provider config is valid")
     }
 
+    #[derive(Clone, Debug, Default)]
+    struct SigningCapture(Arc<StdMutex<Vec<(String, bool)>>>);
+
+    impl aws_smithy_runtime_api::client::http::HttpClient for SigningCapture {
+        fn http_connector(
+            &self,
+            _settings: &aws_smithy_runtime_api::client::http::HttpConnectorSettings,
+            _components: &aws_smithy_runtime_api::client::runtime_components::RuntimeComponents,
+        ) -> aws_smithy_runtime_api::client::http::SharedHttpConnector {
+            aws_smithy_runtime_api::client::http::SharedHttpConnector::new(self.clone())
+        }
+    }
+
+    impl aws_smithy_runtime_api::client::http::HttpConnector for SigningCapture {
+        fn call(
+            &self,
+            request: aws_smithy_runtime_api::client::orchestrator::HttpRequest,
+        ) -> aws_smithy_runtime_api::client::http::HttpConnectorFuture {
+            self.0.lock().unwrap().push((
+                request
+                    .headers()
+                    .get("authorization")
+                    .unwrap_or_default()
+                    .to_string(),
+                request.headers().get("x-amz-region-set").is_some(),
+            ));
+            let mut response = Response::new(StatusCode::try_from(200).unwrap(), SdkBody::empty());
+            response.headers_mut().insert("content-length", "0");
+            aws_smithy_runtime_api::client::http::HttpConnectorFuture::ready(Ok(response))
+        }
+    }
+
+    async fn signing_provider(bucket: &str, capture: &SigningCapture) -> S3Provider {
+        let mut provider = S3Provider::from_config(ProviderConfig {
+            provider: ProviderKind::S3,
+            target: TargetConfig {
+                container: Some(bucket.to_string()),
+                region: Some("us-east-1".to_string()),
+                ..TargetConfig::default()
+            },
+            credentials: CredentialSource::InlineStatic {
+                values: test_credentials(),
+            },
+        })
+        .await
+        .unwrap();
+        provider.client = Client::from_conf(
+            provider
+                .client
+                .config()
+                .to_builder()
+                .http_client(capture.clone())
+                .build(),
+        );
+        provider.guarded_config = provider
+            .guarded_config
+            .to_builder()
+            .http_client(capture.clone())
+            .build();
+        provider
+    }
+
+    #[tokio::test]
+    async fn regional_signing_uses_hmac_for_regular_guarded_and_admitted_clients() {
+        let capture = SigningCapture::default();
+        let provider = signing_provider("sample-bucket", &capture).await;
+        provider.head("object").await.unwrap();
+        provider
+            .guarded_client(Arc::new(Mutex::new(None)))
+            .head_object()
+            .bucket(provider.bucket())
+            .key("object")
+            .send()
+            .await
+            .unwrap();
+        provider
+            .admit_put(
+                "object",
+                PutOptions {
+                    content_length: Some(0),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .unwrap()
+            .execute(
+                Box::new(Cursor::new(Vec::<u8>::new())),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .unwrap();
+        let requests = capture.0.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        for (authorization, region_set) in requests.iter() {
+            assert!(authorization.starts_with("AWS4-HMAC-SHA256 "));
+            assert!(authorization.contains("/us-east-1/s3/aws4_request"));
+            assert!(!region_set);
+        }
+    }
+
+    #[tokio::test]
+    async fn regional_signing_refuses_mrap_before_transport_in_both_configs() {
+        let capture = SigningCapture::default();
+        let provider =
+            signing_provider("arn:aws:s3::123456789012:accesspoint/sample.mrap", &capture).await;
+        for client in [
+            provider.client.clone(),
+            provider.guarded_client(Arc::new(Mutex::new(None))),
+        ] {
+            let error = client
+                .head_object()
+                .bucket(provider.bucket())
+                .key("object")
+                .send()
+                .await
+                .unwrap_err();
+            assert!(format!("{error:?}").contains("Multi-Region Access Point ARNs are disabled"));
+        }
+        let error = provider
+            .admit_put(
+                "object",
+                PutOptions {
+                    content_length: Some(0),
+                    ..PutOptions::default()
+                },
+                WriteMode::SinglePart,
+            )
+            .unwrap()
+            .execute(
+                Box::new(Cursor::new(Vec::<u8>::new())),
+                active_control(Duration::from_secs(5)),
+            )
+            .await
+            .unwrap_err();
+        // The SDK wraps endpoint resolution as DispatchFailure; retain the
+        // existing conservative receipt despite observing zero transport here.
+        assert_eq!(error.commit(), CommitKnowledge::Unknown);
+        assert!(capture.0.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn join_key_respects_root_prefix() {
         assert_eq!(
@@ -3350,6 +3500,60 @@ mod tests {
                 key: "path/to/file.txt".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn copy_rejects_empty_absolute_keys_before_transport() {
+        for root_prefix in [None, Some("root".to_string())] {
+            for bucket in ["sample-bucket", "other-bucket"] {
+                for suffix in ["", "/", "//", "////"] {
+                    for field in ["source", "destination"] {
+                        let capture = SigningCapture::default();
+                        let mut provider = signing_provider("sample-bucket", &capture).await;
+                        provider.root_prefix = root_prefix.clone();
+                        let invalid = format!("s3://{bucket}{suffix}");
+                        let (source, destination) = if field == "source" {
+                            (invalid.clone(), "valid-key".to_string())
+                        } else {
+                            ("valid-key".to_string(), invalid.clone())
+                        };
+                        let error = provider
+                            .copy(CopyRequest {
+                                source,
+                                destination,
+                            })
+                            .await
+                            .expect_err("empty absolute copy key must fail");
+                        assert!(
+                            matches!(error, StorageError::InvalidArgument {
+                            operation: Some(StorageOperation::Copy), argument, ..
+                        } if argument == field),
+                            "wrong error for {field} {invalid}"
+                        );
+                        assert!(
+                            capture.0.lock().unwrap().is_empty(),
+                            "invalid {field} reached transport: {invalid}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_absolute_keys_preserve_literal_bytes_and_ignore_root() {
+        let capture = SigningCapture::default();
+        let mut provider = signing_provider("sample-bucket", &capture).await;
+        provider.root_prefix = Some("root".to_string());
+        for key in ["file", "/file", "dir//file", "%2F", " ", "dir/"] {
+            for field in ["source", "destination"] {
+                let location = provider
+                    .resolve_copy_location(&format!("s3://other-bucket/{key}"), field)
+                    .unwrap();
+                assert_eq!(location.bucket, "other-bucket");
+                assert_eq!(location.key, key);
+            }
+        }
     }
 
     #[test]
