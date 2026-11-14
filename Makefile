@@ -568,6 +568,7 @@ release-crates-verify: ## Wait for the final registry version and verify each pu
 	@CRATE="$(CRATE)" ./scripts/release-crates-verify.sh
 
 release-tooling-test: ## Run release guard, asset, cleanup, and hygiene tests
+	@bash ./scripts/check-release-notes.test.sh
 	@./scripts/sign-release-assets.test.sh
 	@./scripts/release-restore-tag-ref.test.sh
 	@./scripts/export-release-keys.test.sh

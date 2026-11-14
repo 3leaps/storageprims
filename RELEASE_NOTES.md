@@ -6,6 +6,61 @@
 
 ---
 
+## v0.2.1 — 2026-11-13
+
+### Highlights
+
+- Release drafts are bound to a recorded release ID, tag, commit, and exact
+  asset inventory. `make release-publish` verifies the signed draft and remote
+  tag before publication, then verifies the immutable published release.
+- `make release-crates-publish` publishes crates in dependency order with
+  per-crate confirmation and digest-bound credentials. Verification checks
+  registry checksums, archive provenance, license texts, and docs.rs status.
+- S3 clients explicitly refuse Multi-Region Access Points. The default
+  dependency graph no longer enables SigV4A or includes the crypto-bigint
+  dependency covered by RUSTSEC-2026-0387.
+- S3 copy rejects absolute source or destination URIs with empty or slash-only
+  object keys before sending a request. Valid absolute keys retain their
+  literal bytes and remain independent of the provider root prefix.
+
+### Compatibility
+
+- Regional AWS S3 and S3-compatible endpoints retain SigV4 signing. MRAP ARNs
+  are unsupported and refused before request dispatch.
+- Downstream crates that independently enable the AWS SDK's SigV4A feature
+  can restore asymmetric-signing dependencies and should audit their resolved
+  dependency graph. This release does not prohibit every asymmetric-signing
+  path supplied by a downstream SDK configuration.
+- Rust API and C ABI signatures are unchanged. The Rust MSRV remains 1.94.1.
+
+### Release tooling
+
+- The package-check CI job uses a pinned tools container. Signing-subkey
+  selector validation works with stock Debian awk.
+- The checklist covers explicit draft publication, GitHub-first publication
+  order, guarded crate publishing, and recovery after signed asset upload.
+
+### Known issue
+
+- On Windows, a `put` that fails can occasionally leave a reserved
+  `.storageprims-tmp*` staging file in the destination directory. The provider
+  excludes these entries from listings and refuses them as keys. A fix is
+  planned.
+
+### Upgrade notes
+
+- The Rust workspace version is `0.2.1`. Publish `storageprims-core`,
+  `storageprims-s3`, `storageprims-local`, and `storageprims-ops`, in that order,
+  after the signed tag and verified GitHub release. Registry publication is
+  an explicit maintainer step.
+- Git consumers can pin `tag = "v0.2.1"` after the signed tag is published and
+  verified. Release verification instructions are in
+  `docs/security/README.md`.
+
+Full notes: [docs/releases/v0.2.1.md](https://github.com/3leaps/storageprims/blob/v0.2.1/docs/releases/v0.2.1.md)
+
+---
+
 ## v0.2.0 — 2026-11-11
 
 ### Highlights
@@ -77,6 +132,7 @@
   `docs/security/README.md`.
 
 Full notes: [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md)
+
 ---
 
 ## v0.1.2 — 2026-09-28
@@ -97,27 +153,3 @@ Full notes: [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md)
 - Git consumers can pin `v0.1.2` after the signed tag is published and verified.
 
 Full notes: [docs/releases/v0.1.2.md](docs/releases/v0.1.2.md)
----
-
-## v0.1.1 — 2026-09-22
-
-### Highlights
-
-- Rust callers can bind a get, head, or range to a native version or a
-  validator match. Metadata comes from that same response. A listing is not a
-  snapshot. The Unix capability query does not advertise this.
-- Inspection helpers enforce finite byte, request, output, and time limits.
-  Crossing a limit fails the call. An inspection limit still returns numeric
-  `Other`. For that error only, the Unix last-error JSON adds
-  `inspection_version`, `inspection_kind`, `limit_dimension`,
-  `configured_limit`, and `consumed`. Other errors omit those keys. This is
-  not a new Unix capability.
-- Rust callers can ask one provider page for objects and common prefixes. The
-  library does not walk the bucket. The Unix capability query does not
-  advertise this.
-
-### Upgrade notes
-
-- Crates are not on crates.io. Git consumers pin `v0.1.1` after the tag exists.
-
-Full notes: [docs/releases/v0.1.1.md](docs/releases/v0.1.1.md)
