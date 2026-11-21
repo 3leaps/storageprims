@@ -11,6 +11,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-13
+
+- Bind release drafts and publication to a recorded release ID, tag, commit,
+  and exact signed asset inventory; verify immutable publication.
+- Add ordered, digest-gated crate publication, resumable registry checks, and
+  archive checksum, provenance, license, and docs.rs verification.
+- Run package-check CI in a pinned tools container, use portable awk signing
+  selector validation, and update the release checklist and recovery steps.
+- Remove the default SigV4A dependency path and its RUSTSEC-2026-0387 exception;
+  explicitly refuse S3 Multi-Region Access Points in regular and guarded clients.
+- Reject absolute S3 copy source and destination URIs with empty or slash-only
+  object keys before transport.
+
 ## [0.2.0] - 2026-11-11
 
 - Breaking: `StorageError`, `Capability`, and `InspectionLimitDimension` are
@@ -97,7 +110,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Add unsigned native FFI release artifacts and a local MFA signing and
   verification workflow
 
-[Unreleased]: https://github.com/3leaps/storageprims/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/3leaps/storageprims/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/3leaps/storageprims/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/3leaps/storageprims/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/3leaps/storageprims/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/3leaps/storageprims/compare/v0.1.0...v0.1.1
