@@ -39,6 +39,16 @@ cooling:
       reason: "Internal packages"
     - pattern: "github.com/fulmenhq/*"
       reason: "Fulmen ecosystem packages"
+    # Temporary cooling-window exceptions for RUSTSEC-2026-0592 (published 2026-11-20;
+    # exclusive until date expires at 2026-11-29T00:00:00Z after 7-day cooling).
+    - pattern: "url"
+      reason: "RUSTSEC-2026-0592 security fix (url 2.5.9 published 2026-11-20)"
+      until: "2026-11-29"
+      approved_by: "@3leapsdave"
+    - pattern: "form_urlencoded"
+      reason: "Required by url 2.5.9 for RUSTSEC-2026-0592 (form_urlencoded 1.2.3 published 2026-11-20)"
+      until: "2026-11-29"
+      approved_by: "@3leapsdave"
 # Policy engine configuration
 policy_engine:
   type: embedded
