@@ -32,6 +32,31 @@ printf '{"workspace_root":"%s"}\n' "$FIXTURE_REPO"
 STUB
 cat >"$scratch/bin/curl" <<'STUB'
 #!/usr/bin/env bash
+[[ "$1" == "--disable" ]] || {
+	echo "error: curl must start with --disable" >&2
+	exit 2
+}
+expected_ua='storageprims-release-verify/1.0 (+https://github.com/3leaps/storageprims)'
+has_ua=0
+has_https=0
+prev=""
+for arg in "$@"; do
+	if [[ "$prev" == "-A" || "$prev" == "--user-agent" ]]; then
+		[[ "$arg" == "$expected_ua" ]] && has_ua=1
+	fi
+	if [[ "$prev" == "--proto" ]]; then
+		[[ "$arg" == "=https" ]] && has_https=1
+	fi
+	prev="$arg"
+done
+[[ "$has_https" == 1 ]] || {
+	echo "error: curl must restrict --proto to =https" >&2
+	exit 2
+}
+[[ "$has_ua" == 1 ]] || {
+	echo "curl: (56) The requested URL returned error: 403" >&2
+	exit 56
+}
 case "${*: -1}" in
 *api/v1/crates/storageprims-core/1.2.3) cat "$FIXTURE_REGISTRY/api.json" ;;
 *storageprims-core-1.2.3.crate) cat "$FIXTURE_REGISTRY/storageprims-core-1.2.3.crate" ;;
@@ -84,4 +109,39 @@ if MOCK_DOCS_VERSION=9.9.9 run; then
 	echo 'error: accepted wrong docs version' >&2
 	exit 1
 fi
-echo '[ok] registry archives: checksum, provenance, licenses and docs.rs failures rejected'
+# Regression control: omitting the explicit User-Agent on any curl request must
+# fail closed with HTTP 403 (not merely a shell syntax error).
+cp "$root/scripts/release-crates-registry.sh" "$scratch/orig-registry.sh"
+awk '
+	/-A "\$RELEASE_VERIFY_USER_AGENT"/ { next }
+	{ print }
+' "$scratch/orig-registry.sh" >"$repo/scripts/release-crates-registry.sh"
+if run; then
+	echo "error: accepted registry_api_check without explicit User-Agent" >&2
+	exit 1
+fi
+grep -q 'returned error: 403' "$scratch/out" || {
+	cat "$scratch/out" >&2
+	exit 1
+}
+cp "$scratch/orig-registry.sh" "$repo/scripts/release-crates-registry.sh"
+
+cp "$root/scripts/release-crates-verify.sh" "$scratch/orig-verify.sh"
+for occurrence in 1 2 3; do
+	awk -v target="$occurrence" '
+		/-A "\$RELEASE_VERIFY_USER_AGENT"/ { count++; if (count == target) next }
+		{ print }
+	' "$scratch/orig-verify.sh" >"$repo/scripts/release-crates-verify.sh"
+	chmod +x "$repo/scripts/release-crates-verify.sh"
+	if run; then
+		echo "error: accepted curl call #$occurrence without explicit User-Agent" >&2
+		exit 1
+	fi
+	grep -q 'returned error: 403' "$scratch/out" || {
+		cat "$scratch/out" >&2
+		exit 1
+	}
+done
+cp "$scratch/orig-verify.sh" "$repo/scripts/release-crates-verify.sh"
+chmod +x "$repo/scripts/release-crates-verify.sh"
+echo '[ok] registry archives: checksum, provenance, licenses, User-Agent and docs.rs failures rejected'

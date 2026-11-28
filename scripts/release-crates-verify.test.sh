@@ -9,7 +9,8 @@ source "$SCRIPT_DIR/release-crates-registry.sh"
 # shellcheck disable=SC2329
 cargo() { [[ "$*" == 'info --registry crates-io storageprims-core@0.1.2' ]]; }
 curl() {
-	[[ "$*" == *'--fail --silent --show-error --retry 3 --user-agent storageprims-release-verification https://crates.io/api/v1/crates/'* ]] || return 1
+	[[ "$1" == '--disable' ]] || return 1
+	[[ "$*" == *"--proto =https --tlsv1.2 --fail --silent --show-error --retry 3 -A $RELEASE_VERIFY_USER_AGENT https://crates.io/api/v1/crates/"* ]] || return 1
 	case "${response_mode:-ok}" in
 	ok) printf '%s\n' '{"version":{"num":"0.1.2","crate":"storageprims-core","yanked":false}}' ;;
 	yanked) printf '%s\n' '{"version":{"num":"0.1.2","crate":"storageprims-core","yanked":true}}' ;;

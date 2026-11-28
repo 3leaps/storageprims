@@ -26,11 +26,14 @@ verify_crate() {
 	registry_wait "$crate" "$version"
 	registry_api_check "$crate" "$version"
 	curl --disable --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 3 \
+		-A "$RELEASE_VERIFY_USER_AGENT" \
 		"https://crates.io/api/v1/crates/$crate/$version" >"$scratch/api.json"
 	curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
+		-A "$RELEASE_VERIFY_USER_AGENT" \
 		"https://static.crates.io/crates/$crate/$crate-$version.crate" >"$scratch/$crate-$version.crate"
 	"$python_bin" -I "$SCRIPT_DIR/release-crates-audit.py" "$scratch/$crate-$version.crate" "$crate" "$version" "$commit" "$scratch/api.json"
 	curl --disable --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 3 \
+		-A "$RELEASE_VERIFY_USER_AGENT" \
 		"https://docs.rs/crate/$crate/$version/status.json" >"$scratch/docs.json"
 	jq -e --arg version "$version" '.doc_status == true and .version == $version' "$scratch/docs.json" >/dev/null || {
 		echo "error: docs.rs has not completed $crate@$version; rerun verification after the build" >&2

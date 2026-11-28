@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Read-only index and crates.io API checks, also used between manual publishes.
+RELEASE_VERIFY_USER_AGENT='storageprims-release-verify/1.0 (+https://github.com/3leaps/storageprims)'
+
 registry_wait() {
 	local crate="$1" version="$2" attempt
 	for attempt in {1..30}; do
@@ -14,8 +16,8 @@ registry_wait() {
 
 registry_api_check() {
 	local crate="$1" version="$2" response
-	response="$(curl --fail --silent --show-error --retry 3 \
-		--user-agent storageprims-release-verification \
+	response="$(curl --disable --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 3 \
+		-A "$RELEASE_VERIFY_USER_AGENT" \
 		"https://crates.io/api/v1/crates/${crate}/${version}")" || return 1
 	jq -e --arg name "$crate" --arg version "$version" \
 		'.version.num == $version and .version.crate == $name and .version.yanked == false' \
